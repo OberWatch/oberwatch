@@ -12,8 +12,8 @@ import (
 func TestGenerateStarter_TableDriven(t *testing.T) {
 	tests := []struct {
 		name      string
-		setupFile bool
 		wantErr   string
+		setupFile bool
 	}{
 		{name: "writes new file"},
 		{name: "rejects existing file", setupFile: true, wantErr: "refusing to overwrite"},

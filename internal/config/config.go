@@ -26,19 +26,20 @@ type Config struct {
 
 // ServerConfig defines proxy server settings.
 type ServerConfig struct {
-	Port       int       `toml:"port"`
 	Host       string    `toml:"host"`
 	AdminToken string    `toml:"admin_token"`
-	Dashboard  bool      `toml:"dashboard"`
 	LogLevel   LogLevel  `toml:"log_level"`
 	LogFormat  LogFormat `toml:"log_format"`
 	TLSCert    string    `toml:"tls_cert"`
 	TLSKey     string    `toml:"tls_key"`
+	Port       int       `toml:"port"`
+	Dashboard  bool      `toml:"dashboard"`
 }
 
 // LogLevel is a server log verbosity.
 type LogLevel string
 
+// LogLevel constants.
 const (
 	LogLevelDebug LogLevel = "debug"
 	LogLevelInfo  LogLevel = "info"
@@ -49,6 +50,7 @@ const (
 // LogFormat is a server log encoding.
 type LogFormat string
 
+// LogFormat constants.
 const (
 	LogFormatJSON LogFormat = "json"
 	LogFormatText LogFormat = "text"
@@ -67,6 +69,7 @@ type UpstreamConfig struct {
 // ProviderConfigName identifies a configured provider.
 type ProviderConfigName string
 
+// ProviderConfigName constants.
 const (
 	ProviderOpenAI    ProviderConfigName = "openai"
 	ProviderAnthropic ProviderConfigName = "anthropic"
@@ -82,43 +85,44 @@ type ProviderEndpoint struct {
 
 // GateConfig defines cost governor settings.
 type GateConfig struct {
-	Enabled               bool                 `toml:"enabled"`
 	DefaultDowngradeChain []string             `toml:"default_downgrade_chain"`
-	DowngradeThresholdPct float64              `toml:"downgrade_threshold_pct"`
 	AlertThresholdsPct    []float64            `toml:"alert_thresholds_pct"`
 	GlobalBudget          BudgetLimitConfig    `toml:"global_budget"`
 	DefaultBudget         BudgetPolicyConfig   `toml:"default_budget"`
-	Runaway               RunawayConfig        `toml:"runaway"`
 	Agents                []AgentBudgetConfig  `toml:"agents"`
 	Identification        IdentificationConfig `toml:"identification"`
 	APIKeyMap             []APIKeyMapEntry     `toml:"api_key_map"`
+	Runaway               RunawayConfig        `toml:"runaway"`
+	DowngradeThresholdPct float64              `toml:"downgrade_threshold_pct"`
+	Enabled               bool                 `toml:"enabled"`
 }
 
 // BudgetLimitConfig defines a budget limit and reset period.
 type BudgetLimitConfig struct {
-	LimitUSD float64      `toml:"limit_usd"`
 	Period   BudgetPeriod `toml:"period"`
+	LimitUSD float64      `toml:"limit_usd"`
 }
 
 // BudgetPolicyConfig defines a budget limit with an enforcement action.
 type BudgetPolicyConfig struct {
-	LimitUSD       float64      `toml:"limit_usd"`
 	Period         BudgetPeriod `toml:"period"`
 	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
+	LimitUSD       float64      `toml:"limit_usd"`
 }
 
 // AgentBudgetConfig defines a per-agent override.
 type AgentBudgetConfig struct {
 	Name           string       `toml:"name"`
-	LimitUSD       float64      `toml:"limit_usd"`
 	Period         BudgetPeriod `toml:"period"`
 	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
 	DowngradeChain []string     `toml:"downgrade_chain"`
+	LimitUSD       float64      `toml:"limit_usd"`
 }
 
 // BudgetPeriod is a budget reset window.
 type BudgetPeriod string
 
+// BudgetPeriod constants.
 const (
 	BudgetPeriodHourly  BudgetPeriod = "hourly"
 	BudgetPeriodDaily   BudgetPeriod = "daily"
@@ -129,6 +133,7 @@ const (
 // BudgetAction is the action taken on budget exceed.
 type BudgetAction string
 
+// BudgetAction constants.
 const (
 	BudgetActionReject    BudgetAction = "reject"
 	BudgetActionDowngrade BudgetAction = "downgrade"
@@ -151,6 +156,7 @@ type IdentificationConfig struct {
 // IdentificationMethod identifies agents from incoming traffic.
 type IdentificationMethod string
 
+// IdentificationMethod constants.
 const (
 	IdentificationMethodHeader   IdentificationMethod = "header"
 	IdentificationMethodAPIKey   IdentificationMethod = "api_key"
@@ -172,29 +178,30 @@ type AlertsConfig struct {
 
 // EmailConfig defines SMTP alert settings.
 type EmailConfig struct {
-	Enabled      bool     `toml:"enabled"`
 	SMTPHost     string   `toml:"smtp_host"`
-	SMTPPort     int      `toml:"smtp_port"`
 	SMTPUser     string   `toml:"smtp_user"`
 	SMTPPassword string   `toml:"smtp_password"`
 	From         string   `toml:"from"`
 	To           []string `toml:"to"`
+	SMTPPort     int      `toml:"smtp_port"`
+	Enabled      bool     `toml:"enabled"`
 }
 
 // TraceConfig defines trace collection settings.
 type TraceConfig struct {
-	Enabled          bool         `toml:"enabled"`
-	CaptureContent   bool         `toml:"capture_content"`
-	MemoryBufferSize int          `toml:"memory_buffer_size"`
 	Retention        string       `toml:"retention"`
 	Storage          TraceStorage `toml:"storage"`
 	SQLitePath       string       `toml:"sqlite_path"`
 	TraceTimeout     string       `toml:"trace_timeout"`
+	MemoryBufferSize int          `toml:"memory_buffer_size"`
+	Enabled          bool         `toml:"enabled"`
+	CaptureContent   bool         `toml:"capture_content"`
 }
 
 // TraceStorage is the trace persistence backend.
 type TraceStorage string
 
+// TraceStorage constants.
 const (
 	TraceStorageMemory TraceStorage = "memory"
 	TraceStorageSQLite TraceStorage = "sqlite"
@@ -203,9 +210,9 @@ const (
 // TestConfig defines the behavioral test harness settings.
 type TestConfig struct {
 	ScenariosDir string      `toml:"scenarios_dir"`
-	Concurrency  int         `toml:"concurrency"`
 	Timeout      string      `toml:"timeout"`
 	Judge        JudgeConfig `toml:"judge"`
+	Concurrency  int         `toml:"concurrency"`
 }
 
 // JudgeConfig defines LLM-as-judge settings.

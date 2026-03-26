@@ -40,7 +40,8 @@ func NewValidateCmd() *cobra.Command {
 				return err
 			}
 
-			if _, err := Load(resolvedPath); err != nil {
+			_, err = Load(resolvedPath)
+			if err != nil {
 				return err
 			}
 

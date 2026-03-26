@@ -14,9 +14,9 @@ func TestDefaultConfig_HasExpectedDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
 	tests := []struct {
-		name string
 		got  any
 		want any
+		name string
 	}{
 		{name: "server.port", got: cfg.Server.Port, want: 8080},
 		{name: "server.host", got: cfg.Server.Host, want: "0.0.0.0"},
@@ -88,9 +88,9 @@ to = ["ops@example.com"]
 	}
 
 	tests := []struct {
-		name string
 		got  any
 		want any
+		name string
 	}{
 		{name: "env overrides scalar", got: cfg.Server.Port, want: 9191},
 		{name: "file keeps defaulted host", got: cfg.Server.Host, want: "0.0.0.0"},
@@ -173,10 +173,10 @@ port = 0
 
 func TestApplyEnvOverrides_TableDriven(t *testing.T) {
 	tests := []struct {
-		name    string
-		env     []string
 		check   func(Config) any
+		env     []string
 		want    any
+		name    string
 		wantErr string
 	}{
 		{
@@ -237,10 +237,10 @@ func TestApplyEnvOverrides_TableDriven(t *testing.T) {
 
 func TestFindConfigFile_SearchOrder(t *testing.T) {
 	tests := []struct {
+		wantRel      string
 		name         string
 		setupCurrent bool
 		setupHome    bool
-		wantRel      string
 	}{
 		{name: "prefers current directory", setupCurrent: true, setupHome: true, wantRel: "oberwatch.toml"},
 		{name: "falls back to home config", setupHome: true, wantRel: filepath.Join(".config", "oberwatch", "oberwatch.toml")},
@@ -289,7 +289,7 @@ func TestFindConfigFile_SearchOrder(t *testing.T) {
 				return
 			}
 
-			want := tt.wantRel
+			var want string
 			if tt.setupCurrent {
 				want = "./" + tt.wantRel
 			} else {
@@ -304,11 +304,11 @@ func TestFindConfigFile_SearchOrder(t *testing.T) {
 
 func TestResolveConfigPath(t *testing.T) {
 	tests := []struct {
+		wantSuffix string
+		wantErr    string
 		name       string
 		explicit   bool
 		setupCWD   bool
-		wantSuffix string
-		wantErr    string
 	}{
 		{name: "uses explicit path", explicit: true, wantSuffix: "custom.toml"},
 		{name: "finds cwd config", setupCWD: true, wantSuffix: "oberwatch.toml"},
@@ -317,19 +317,19 @@ func TestResolveConfigPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			origWD, err := os.Getwd()
-			if err != nil {
-				t.Fatalf("Getwd() error = %v", err)
+			origWD, getWDErr := os.Getwd()
+			if getWDErr != nil {
+				t.Fatalf("Getwd() error = %v", getWDErr)
 			}
 
 			dir := t.TempDir()
 			t.Setenv("HOME", t.TempDir())
-			if err := os.Chdir(dir); err != nil {
-				t.Fatalf("Chdir() error = %v", err)
+			if chdirErr := os.Chdir(dir); chdirErr != nil {
+				t.Fatalf("Chdir() error = %v", chdirErr)
 			}
 			t.Cleanup(func() {
-				if err := os.Chdir(origWD); err != nil {
-					t.Fatalf("restore cwd: %v", err)
+				if restoreErr := os.Chdir(origWD); restoreErr != nil {
+					t.Fatalf("restore cwd: %v", restoreErr)
 				}
 			})
 
@@ -338,8 +338,8 @@ func TestResolveConfigPath(t *testing.T) {
 				path = filepath.Join(dir, "custom.toml")
 			}
 			if tt.setupCWD {
-				if err := os.WriteFile(filepath.Join(dir, "oberwatch.toml"), []byte(""), 0o644); err != nil {
-					t.Fatalf("WriteFile() error = %v", err)
+				if writeErr := os.WriteFile(filepath.Join(dir, "oberwatch.toml"), []byte(""), 0o644); writeErr != nil {
+					t.Fatalf("WriteFile() error = %v", writeErr)
 				}
 			}
 
@@ -370,8 +370,8 @@ func TestSetSliceValueFromString_TOMLArraySyntax(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findFieldByTOMLTag() error = %v", err)
 	}
-	if err := setSliceValueFromString(stringSlice, `["a", "b"]`); err != nil {
-		t.Fatalf("setSliceValueFromString() error = %v", err)
+	if setErr := setSliceValueFromString(stringSlice, `["a", "b"]`); setErr != nil {
+		t.Fatalf("setSliceValueFromString() error = %v", setErr)
 	}
 	if !reflect.DeepEqual(cfg.Gate.DefaultDowngradeChain, []string{"a", "b"}) {
 		t.Fatalf("got %#v", cfg.Gate.DefaultDowngradeChain)
