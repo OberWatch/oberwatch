@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  oberwatch:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./oberwatch.toml:/etc/oberwatch/oberwatch.toml:ro
+      - oberwatch-data:/data
+      - ./scenarios:/scenarios:ro
+    environment:
+      - OBERWATCH_SERVER__ADMIN_TOKEN=dev-token-change-me
+      - OBERWATCH_SERVER__LOG_LEVEL=debug
+
+volumes:
+  oberwatch-data:

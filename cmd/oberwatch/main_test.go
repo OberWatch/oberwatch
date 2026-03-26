@@ -288,6 +288,158 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 	}
 }
 
+func TestValidateAndInitCommands(t *testing.T) {
+	//nolint:govet // Keep table fields grouped for clearer command test setup.
+	tests := []struct {
+		name       string
+		args       []string
+		wantErrSub string
+		wantOutSub string
+		checkFile  string
+	}{
+		{
+			name:       "validate succeeds with valid config",
+			args:       []string{"validate"},
+			wantOutSub: "is valid",
+		},
+		{
+			name:       "validate fails with missing config",
+			args:       []string{"validate"},
+			wantErrSub: "parse config",
+		},
+		{
+			name:       "init writes starter file",
+			args:       []string{"init"},
+			wantOutSub: "wrote starter config",
+			checkFile:  "exists",
+		},
+		{
+			name:       "init fails when file exists without force",
+			args:       []string{"init"},
+			wantErrSub: "refusing to overwrite existing file",
+			checkFile:  "precreate",
+		},
+		{
+			name:       "init force overwrites existing file",
+			args:       []string{"init", "--force"},
+			wantOutSub: "wrote starter config",
+			checkFile:  "precreate",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfgPath := writeValidConfig(t)
+			missingPath := filepath.Join(t.TempDir(), "missing.toml")
+			outputPath := filepath.Join(t.TempDir(), "nested", "oberwatch.toml")
+
+			if tt.checkFile == "precreate" {
+				if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+					t.Fatalf("MkdirAll() error = %v", err)
+				}
+				if err := os.WriteFile(outputPath, []byte("old"), 0o644); err != nil {
+					t.Fatalf("WriteFile(precreate) error = %v", err)
+				}
+			}
+
+			root := newRootCmd()
+			var stdout bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&bytes.Buffer{})
+
+			switch tt.name {
+			case "validate succeeds with valid config":
+				root.SetArgs([]string{"--config", cfgPath, "validate"})
+			case "validate fails with missing config":
+				root.SetArgs([]string{"--config", missingPath, "validate"})
+			default:
+				root.SetArgs(append([]string{"init", "--output", outputPath}, tt.args[1:]...))
+			}
+
+			err := root.Execute()
+			if tt.wantErrSub == "" {
+				if err != nil {
+					t.Fatalf("Execute() error = %v", err)
+				}
+				if tt.wantOutSub != "" && !strings.Contains(stdout.String(), tt.wantOutSub) {
+					t.Fatalf("stdout = %q, want substring %q", stdout.String(), tt.wantOutSub)
+				}
+				if tt.checkFile == "exists" || tt.checkFile == "precreate" {
+					if _, statErr := os.Stat(outputPath); statErr != nil {
+						t.Fatalf("Stat(%q) error = %v", outputPath, statErr)
+					}
+				}
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("Execute() error = %v, want substring %q", err, tt.wantErrSub)
+			}
+		})
+	}
+}
+
+func TestRunAndWriteStarterConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		runTest    func(*testing.T)
+		wantErrSub string
+	}{
+		{
+			name: "run executes version command",
+			runTest: func(t *testing.T) {
+				t.Helper()
+				originalArgs := os.Args
+				defer func() { os.Args = originalArgs }()
+				os.Args = []string{"oberwatch", "version"}
+
+				if err := run(); err != nil {
+					t.Fatalf("run() error = %v", err)
+				}
+			},
+		},
+		{
+			name: "writeStarterConfig force creates nested path",
+			runTest: func(t *testing.T) {
+				t.Helper()
+				path := filepath.Join(t.TempDir(), "deep", "oberwatch.toml")
+				if err := writeStarterConfig(path, true); err != nil {
+					t.Fatalf("writeStarterConfig(force=true) error = %v", err)
+				}
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("ReadFile() error = %v", err)
+				}
+				if !strings.Contains(string(content), "[server]") {
+					t.Fatalf("starter config missing [server] section: %q", string(content))
+				}
+			},
+		},
+		{
+			name: "writeStarterConfig without force errors on existing file",
+			runTest: func(t *testing.T) {
+				t.Helper()
+				path := filepath.Join(t.TempDir(), "oberwatch.toml")
+				if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+				err := writeStarterConfig(path, false)
+				if err == nil {
+					t.Fatal("writeStarterConfig(force=false) error = nil, want non-nil")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			tt.runTest(t)
+		})
+	}
+}
+
 func writeValidConfig(t *testing.T) string {
 	t.Helper()
 

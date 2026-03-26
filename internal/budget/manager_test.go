@@ -637,3 +637,135 @@ func TestRecordSpend_NegativeIgnored(t *testing.T) {
 		t.Fatalf("spent after negative record = %v, want 1.0", spent)
 	}
 }
+
+func TestBudgetViewsAndMutations(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	clock := newMockClock(start)
+	cfg := baseGateConfig()
+	cfg.Agents = []config.AgentBudgetConfig{
+		{
+			Name:           "configured-agent",
+			LimitUSD:       20,
+			Period:         config.BudgetPeriodWeekly,
+			ActionOnExceed: config.BudgetActionAlert,
+		},
+	}
+	manager := NewManagerWithClock(cfg, nil, clock)
+
+	manager.RecordSpend("agent-a", 3)
+	manager.KillAgent("agent-b")
+
+	views := manager.ListBudgets()
+	if len(views) < 3 {
+		t.Fatalf("ListBudgets() len = %d, want at least 3", len(views))
+	}
+
+	agentA := manager.GetBudget("agent-a")
+	if agentA.Agent != "agent-a" {
+		t.Fatalf("GetBudget(agent-a).Agent = %q, want %q", agentA.Agent, "agent-a")
+	}
+	if agentA.SpentUSD != 3 {
+		t.Fatalf("GetBudget(agent-a).SpentUSD = %v, want 3", agentA.SpentUSD)
+	}
+	if agentA.Status != "active" {
+		t.Fatalf("GetBudget(agent-a).Status = %q, want %q", agentA.Status, "active")
+	}
+	if agentA.RemainingUSD != 7 {
+		t.Fatalf("GetBudget(agent-a).RemainingUSD = %v, want 7", agentA.RemainingUSD)
+	}
+	if agentA.PercentageUsed != 30 {
+		t.Fatalf("GetBudget(agent-a).PercentageUsed = %v, want 30", agentA.PercentageUsed)
+	}
+
+	agentB := manager.GetBudget("agent-b")
+	if agentB.Status != "killed" {
+		t.Fatalf("GetBudget(agent-b).Status = %q, want %q", agentB.Status, "killed")
+	}
+	if !agentB.PeriodResetsAt.Equal(start.Add(24 * time.Hour)) {
+		t.Fatalf("GetBudget(agent-b).PeriodResetsAt = %v, want %v", agentB.PeriodResetsAt, start.Add(24*time.Hour))
+	}
+
+	updateTests := []struct {
+		name      string
+		update    BudgetUpdate
+		wantError bool
+	}{
+		{
+			name: "reject negative limit",
+			update: BudgetUpdate{
+				LimitUSD:              -1,
+				Period:                config.BudgetPeriodDaily,
+				ActionOnExceed:        config.BudgetActionAlert,
+				DowngradeThresholdPct: 80,
+				DowngradeChain:        []string{"a", "b"},
+				AlertThresholdsPct:    []float64{50, 80},
+			},
+			wantError: true,
+		},
+		{
+			name: "reject threshold over 100",
+			update: BudgetUpdate{
+				LimitUSD:              10,
+				Period:                config.BudgetPeriodDaily,
+				ActionOnExceed:        config.BudgetActionAlert,
+				DowngradeThresholdPct: 101,
+				DowngradeChain:        []string{"a", "b"},
+				AlertThresholdsPct:    []float64{50, 80},
+			},
+			wantError: true,
+		},
+		{
+			name: "apply valid update",
+			update: BudgetUpdate{
+				LimitUSD:              25,
+				Period:                config.BudgetPeriodWeekly,
+				ActionOnExceed:        config.BudgetActionReject,
+				DowngradeThresholdPct: 70,
+				DowngradeChain:        []string{"m1", "m2"},
+				AlertThresholdsPct:    []float64{40, 70, 100},
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range updateTests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := manager.UpdateBudget("agent-a", tt.update)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("UpdateBudget() error = nil, want non-nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UpdateBudget() error = %v", err)
+			}
+		})
+	}
+
+	updated := manager.GetBudget("agent-a")
+	if updated.LimitUSD != 25 {
+		t.Fatalf("updated limit = %v, want 25", updated.LimitUSD)
+	}
+	if updated.ActionOnExceed != config.BudgetActionReject {
+		t.Fatalf("updated action = %q, want %q", updated.ActionOnExceed, config.BudgetActionReject)
+	}
+	if updated.Period != config.BudgetPeriodWeekly {
+		t.Fatalf("updated period = %q, want %q", updated.Period, config.BudgetPeriodWeekly)
+	}
+
+	manager.ResetBudget("agent-a")
+	reset := manager.GetBudget("agent-a")
+	if reset.SpentUSD != 0 {
+		t.Fatalf("ResetBudget spent = %v, want 0", reset.SpentUSD)
+	}
+	if reset.PercentageUsed != 0 {
+		t.Fatalf("ResetBudget percentage = %v, want 0", reset.PercentageUsed)
+	}
+	if !reset.PeriodResetsAt.Equal(start.Add(7 * 24 * time.Hour)) {
+		t.Fatalf("ResetBudget period reset = %v, want %v", reset.PeriodResetsAt, start.Add(7*24*time.Hour))
+	}
+}

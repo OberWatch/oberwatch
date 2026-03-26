@@ -600,6 +600,59 @@ func TestBudgetTrackingBody_EnqueuesCostRecord(t *testing.T) {
 	}
 }
 
+func TestServer_DirectProxyErrorPathWithoutNetworkListener(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // Keep table fields grouped for request/expectation readability.
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "proxy path returns bad gateway when upstream is unreachable",
+			path:       "/v1/chat/completions",
+			wantStatus: http.StatusBadGateway,
+			wantBody:   "upstream proxy error",
+		},
+		{
+			name:       "management path without handler falls through to proxy and fails upstream",
+			path:       "/_oberwatch/api/v1/budgets",
+			wantStatus: http.StatusBadGateway,
+			wantBody:   "upstream proxy error",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.DefaultConfig()
+			cfg.Upstream.OpenAI.BaseURL = "http://127.0.0.1:1"
+			cfg.Upstream.Anthropic.BaseURL = "http://127.0.0.1:1"
+			cfg.Upstream.DefaultProvider = config.ProviderOpenAI
+
+			server, err := New(cfg, Hooks{})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"model":"gpt-4o","stream":false}`))
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status code = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			if !strings.Contains(recorder.Body.String(), tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", recorder.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
 type errorReadCloser struct {
 	err error
 }
