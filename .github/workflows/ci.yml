@@ -50,6 +50,8 @@ jobs:
       - run: go vet ./...
 
   dashboard:
+    # Temporary: dashboard app is not implemented yet.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
