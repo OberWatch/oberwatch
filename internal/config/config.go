@@ -305,9 +305,9 @@ func defaultPricing() []PricingEntry {
 		{Model: "gpt-4o-mini", Provider: ProviderOpenAI, InputPerMillion: 0.15, OutputPerMillion: 0.60},
 		{Model: "gpt-4.1", Provider: ProviderOpenAI, InputPerMillion: 2.00, OutputPerMillion: 8.00},
 		{Model: "gpt-4.1-mini", Provider: ProviderOpenAI, InputPerMillion: 0.40, OutputPerMillion: 1.60},
-		{Model: "claude-opus-4-6", Provider: ProviderAnthropic, InputPerMillion: 15.00, OutputPerMillion: 75.00},
+		{Model: "claude-opus-4-6", Provider: ProviderAnthropic, InputPerMillion: 5.00, OutputPerMillion: 25.00},
 		{Model: "claude-sonnet-4-6", Provider: ProviderAnthropic, InputPerMillion: 3.00, OutputPerMillion: 15.00},
-		{Model: "claude-haiku-4-5", Provider: ProviderAnthropic, InputPerMillion: 0.80, OutputPerMillion: 4.00},
+		{Model: "claude-haiku-4-5", Provider: ProviderAnthropic, InputPerMillion: 1.00, OutputPerMillion: 5.00},
 		{Model: "gemini-2.5-pro", Provider: ProviderGoogle, InputPerMillion: 1.25, OutputPerMillion: 10.00},
 		{Model: "gemini-2.5-flash", Provider: ProviderGoogle, InputPerMillion: 0.15, OutputPerMillion: 0.60},
 	}

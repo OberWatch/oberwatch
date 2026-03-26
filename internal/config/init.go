@@ -243,8 +243,8 @@ output_per_million = 1.60
 [[pricing]]
 model = "claude-opus-4-6"
 provider = "anthropic"
-input_per_million = 15.00
-output_per_million = 75.00
+input_per_million = 5.00
+output_per_million = 25.00
 
 [[pricing]]
 model = "claude-sonnet-4-6"
@@ -255,8 +255,8 @@ output_per_million = 15.00
 [[pricing]]
 model = "claude-haiku-4-5"
 provider = "anthropic"
-input_per_million = 0.80
-output_per_million = 4.00
+input_per_million = 1.00
+output_per_million = 5.00
 
 [[pricing]]
 model = "gemini-2.5-pro"
