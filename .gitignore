@@ -38,3 +38,4 @@ dashboard/svelte/node_modules/
 
 # Temporary files
 tmp/
+.tools/

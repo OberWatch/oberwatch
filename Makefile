@@ -1,12 +1,22 @@
-.PHONY: build run test lint clean fmt vet dashboard
+.PHONY: tools build run test test-race lint clean fmt vet dashboard
 
 BINARY_NAME := oberwatch
 BUILD_DIR := bin
 CMD_DIR := ./cmd/oberwatch
+TOOLS_BIN := $(CURDIR)/.tools/bin
+GO ?= go
+GOFMT ?= gofmt
+GOCACHE ?= $(CURDIR)/.tools/cache/go-build
+
+export PATH := $(TOOLS_BIN):$(PATH)
+export GOCACHE
+
+tools:
+	./scripts/dev/install-tools.sh
 
 # Build the oberwatch binary
 build:
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
+	$(GO) build -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
 
 # Run the oberwatch binary
 run: build
@@ -14,23 +24,23 @@ run: build
 
 # Run all tests
 test:
-	go test ./...
+	$(GO) test ./...
 
 # Run tests with race detector
 test-race:
-	go test -race ./...
+	$(GO) test -race ./...
 
 # Run linter
-lint:
+lint: tools
 	golangci-lint run
 
 # Format code
 fmt:
-	gofmt -w .
+	$(GOFMT) -w .
 
 # Run go vet
 vet:
-	go vet ./...
+	$(GO) vet ./...
 
 # Clean build artifacts
 clean:

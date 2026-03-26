@@ -9,13 +9,14 @@ Thank you for your interest in contributing to Oberwatch.
 - Go 1.26+
 - Node.js 22+ (for dashboard development)
 - Make
-- golangci-lint
+- curl (for tool bootstrap)
 
 ### Clone and Build
 
 ```bash
 git clone https://github.com/OberWatch/oberwatch.git
 cd oberwatch
+make tools
 make build
 ```
 

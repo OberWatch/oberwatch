@@ -32,13 +32,13 @@ func TestNewInitCmd(t *testing.T) {
 
 func TestNewValidateCmd_TableDriven(t *testing.T) {
 	tests := []struct {
-		args       []string
 		content    string
 		envKey     string
 		envValue   string
 		wantErr    string
 		wantStdout string
 		name       string
+		args       []string
 		useCWD     bool
 	}{
 		{

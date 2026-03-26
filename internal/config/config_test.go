@@ -174,10 +174,10 @@ port = 0
 func TestApplyEnvOverrides_TableDriven(t *testing.T) {
 	tests := []struct {
 		check   func(Config) any
-		env     []string
 		want    any
 		name    string
 		wantErr string
+		env     []string
 	}{
 		{
 			name:  "override scalar bool",

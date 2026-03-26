@@ -17,11 +17,11 @@ const envPrefix = "OBERWATCH_"
 type Config struct {
 	Server   ServerConfig   `toml:"server"`
 	Upstream UpstreamConfig `toml:"upstream"`
-	Gate     GateConfig     `toml:"gate"`
 	Alerts   AlertsConfig   `toml:"alerts"`
 	Trace    TraceConfig    `toml:"trace"`
 	Test     TestConfig     `toml:"test"`
 	Pricing  []PricingEntry `toml:"pricing"`
+	Gate     GateConfig     `toml:"gate"`
 }
 
 // ServerConfig defines proxy server settings.
