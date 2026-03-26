@@ -2,6 +2,9 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -9,7 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/pricing"
 )
 
 func TestDetectProvider_TableDriven(t *testing.T) {
@@ -283,4 +288,218 @@ func TestNew_HealthPathRunsHookChainWithoutUpstreamCalls(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGateMiddleware_BudgetRejectAndDowngrade(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reject stops before next", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.DefaultConfig()
+		cfg.Gate.DefaultBudget.LimitUSD = 1
+		cfg.Gate.DefaultBudget.ActionOnExceed = config.BudgetActionReject
+
+		manager := budget.NewManager(cfg.Gate, nil)
+		manager.RecordSpend("agent-a", 1)
+		table := pricing.NewPricingTableFromConfig(cfg.Pricing, nil)
+
+		var called bool
+		handler := gateMiddleware(Hooks{
+			Budget:  manager,
+			Pricing: table,
+		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusNoContent)
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
+		req.Header.Set("X-Oberwatch-Agent", "agent-a")
+		recorder := httptest.NewRecorder()
+
+		handler.ServeHTTP(recorder, req)
+		if called {
+			t.Fatal("next handler was called, want blocked")
+		}
+		if recorder.Code != http.StatusTooManyRequests {
+			t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+		}
+	})
+
+	t.Run("downgrade rewrites request body", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.DefaultConfig()
+		cfg.Gate.DefaultBudget.LimitUSD = 10
+		cfg.Gate.DefaultBudget.ActionOnExceed = config.BudgetActionDowngrade
+		cfg.Gate.DowngradeThresholdPct = 50
+		cfg.Gate.DefaultDowngradeChain = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
+
+		manager := budget.NewManager(cfg.Gate, nil)
+		manager.RecordSpend("agent-b", 6)
+		table := pricing.NewPricingTableFromConfig(cfg.Pricing, nil)
+
+		handler := gateMiddleware(Hooks{
+			Budget:  manager,
+			Pricing: table,
+		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("ReadAll() error = %v", err)
+			}
+			if !strings.Contains(string(payload), `"model":"claude-sonnet-4-6"`) {
+				t.Fatalf("rewritten payload = %s, want downgraded model", string(payload))
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-4-6","stream":false}`))
+		req.Header.Set("X-Oberwatch-Agent", "agent-b")
+		recorder := httptest.NewRecorder()
+
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusNoContent)
+		}
+	})
+}
+
+func TestGateMiddleware_ConfigErrorOnReadFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	manager := budget.NewManager(cfg.Gate, nil)
+	table := pricing.NewPricingTableFromConfig(cfg.Pricing, nil)
+
+	var called bool
+	handler := gateMiddleware(Hooks{
+		Budget:  manager,
+		Pricing: table,
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Body = errorReadCloser{err: errors.New("boom")}
+	req.ContentLength = 10
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+	if called {
+		t.Fatal("next handler was called, want blocked on config error")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(recorder.Body.String(), "config_error") {
+		t.Fatalf("response body = %q, want config_error payload", recorder.Body.String())
+	}
+}
+
+func TestBudgetTrackingBody_FinalizePaths(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	manager := budget.NewManager(cfg.Gate, nil)
+	table := pricing.NewPricingTableFromConfig(cfg.Pricing, nil)
+
+	tracker := newBudgetTrackingBody(
+		io.NopCloser(strings.NewReader(`{"usage":{"prompt_tokens":100,"completion_tokens":50}}`)),
+		http.StatusOK,
+		"application/json",
+		budgetRequestMeta{agent: "agent-usage", model: "gpt-4o", provider: "openai"},
+		manager,
+		table,
+		nil,
+	)
+	if _, err := io.ReadAll(tracker); err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if err := tracker.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if spent := manager.Snapshot("agent-usage").SpentUSD; spent <= 0 {
+		t.Fatalf("spent = %v, want > 0", spent)
+	}
+
+	tracker = newBudgetTrackingBody(
+		io.NopCloser(strings.NewReader("upstream failure")),
+		http.StatusBadGateway,
+		"text/plain",
+		budgetRequestMeta{agent: "agent-usage", model: "gpt-4o", provider: "openai"},
+		manager,
+		table,
+		nil,
+	)
+	if _, err := io.ReadAll(tracker); err != nil {
+		t.Fatalf("ReadAll(non2xx) error = %v", err)
+	}
+	if err := tracker.Close(); err != nil {
+		t.Fatalf("Close(non2xx) error = %v", err)
+	}
+}
+
+func TestHelperFunctions_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		body       string
+		wantModel  string
+		wantStream bool
+	}{
+		{name: "valid body", body: `{"model":"gpt-4o","stream":true}`, wantModel: "gpt-4o", wantStream: true},
+		{name: "invalid body", body: `{`, wantModel: "", wantStream: false},
+		{name: "empty body", body: ``, wantModel: "", wantStream: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model, streaming := extractModelAndStream([]byte(tt.body))
+			if model != tt.wantModel || streaming != tt.wantStream {
+				t.Fatalf("extractModelAndStream(%q) = (%q,%v), want (%q,%v)", tt.body, model, streaming, tt.wantModel, tt.wantStream)
+			}
+		})
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logDowngrade(logger, "agent-a", "a", "b")
+
+	recorder := httptest.NewRecorder()
+	writeConfigError(recorder, "bad config")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("writeConfigError status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+
+	recorder = httptest.NewRecorder()
+	writeBudgetError(recorder, budget.Decision{
+		Code:     "agent_killed",
+		Message:  "killed",
+		Agent:    "agent-x",
+		LimitUSD: 10,
+		SpentUSD: 11,
+		Period:   config.BudgetPeriodDaily,
+	}, http.StatusTooManyRequests)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("writeBudgetError status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	if !strings.Contains(recorder.Body.String(), `"agent_killed"`) {
+		t.Fatalf("writeBudgetError body = %q, want agent_killed code", recorder.Body.String())
+	}
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (e errorReadCloser) Read([]byte) (int, error) {
+	return 0, e.err
+}
+
+func (e errorReadCloser) Close() error {
+	return nil
 }

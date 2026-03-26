@@ -1,14 +1,21 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 
+	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/pricing"
 )
 
 const (
@@ -16,13 +23,25 @@ const (
 	oberwatchHeaderPrefixLower = "x-oberwatch-"
 )
 
+type budgetContextKey struct{}
+
+type budgetRequestMeta struct {
+	agent     string
+	model     string
+	provider  string
+	streaming bool
+}
+
 // Hook is a middleware callback executed for each request.
 type Hook func(*http.Request)
 
 // Hooks contains middleware callbacks used by the proxy chain.
 type Hooks struct {
-	Gate  Hook
-	Trace Hook
+	Gate    Hook
+	Trace   Hook
+	Budget  *budget.BudgetManager
+	Pricing *pricing.PricingTable
+	Logger  *slog.Logger
 }
 
 // Server is the HTTP reverse proxy for upstream LLM providers.
@@ -55,6 +74,27 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			http.Error(w, fmt.Sprintf("upstream proxy error: %v", err), http.StatusBadGateway)
 		},
+		ModifyResponse: func(response *http.Response) error {
+			if hooks.Budget == nil || hooks.Pricing == nil {
+				return nil
+			}
+
+			value := response.Request.Context().Value(budgetContextKey{})
+			meta, ok := value.(budgetRequestMeta)
+			if !ok {
+				return nil
+			}
+			response.Body = newBudgetTrackingBody(
+				response.Body,
+				response.StatusCode,
+				response.Header.Get("Content-Type"),
+				meta,
+				hooks.Budget,
+				hooks.Pricing,
+				hooks.Logger,
+			)
+			return nil
+		},
 	}
 
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +106,7 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 		reverseProxy.ServeHTTP(w, r)
 	})
 
-	chained := chain(proxyHandler, gateMiddleware(hooks.Gate), traceMiddleware(hooks.Trace))
+	chained := chain(proxyHandler, gateMiddleware(hooks), traceMiddleware(hooks.Trace))
 
 	return &Server{handler: chained}, nil
 }
@@ -150,11 +190,64 @@ func chain(base http.Handler, middlewares ...func(http.Handler) http.Handler) ht
 	return chained
 }
 
-func gateMiddleware(hook Hook) func(http.Handler) http.Handler {
+func gateMiddleware(hooks Hooks) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if hook != nil {
-				hook(r)
+			if hooks.Gate != nil {
+				hooks.Gate(r)
+			}
+			if hooks.Budget != nil && hooks.Pricing != nil {
+				agent := hooks.Budget.IdentifyAgent(r)
+
+				requestBody, err := io.ReadAll(r.Body)
+				if err != nil {
+					writeConfigError(w, fmt.Sprintf("read request body: %v", err))
+					return
+				}
+				model, streaming := extractModelAndStream(requestBody)
+
+				estimatedInputTokens := len(requestBody) / 4
+				estimatedCost := hooks.Pricing.CalculateCost(model, estimatedInputTokens, 0)
+				decision := hooks.Budget.CheckBudgetDetailed(agent, estimatedCost)
+
+				switch decision.Action {
+				case budget.ActionKill:
+					writeBudgetError(w, decision, http.StatusTooManyRequests)
+					return
+				case budget.ActionReject:
+					writeBudgetError(w, decision, http.StatusTooManyRequests)
+					return
+				case budget.ActionDowngrade:
+					rewritten, originalModel, newModel, downgraded, rewriteErr := hooks.Budget.RewriteModelForDowngrade(agent, requestBody)
+					if rewriteErr != nil {
+						writeConfigError(w, fmt.Sprintf("rewrite downgrade body: %v", rewriteErr))
+						return
+					}
+
+					if downgraded {
+						requestBody = rewritten
+						model = newModel
+						logDowngrade(hooks.Logger, agent, originalModel, newModel)
+					} else if decision.Over {
+						writeBudgetError(w, decision, http.StatusTooManyRequests)
+						return
+					}
+				case budget.ActionAlert, budget.ActionAllow:
+				default:
+				}
+
+				r.Body = io.NopCloser(bytes.NewReader(requestBody))
+				r.ContentLength = int64(len(requestBody))
+				r.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(requestBody)), nil
+				}
+				meta := budgetRequestMeta{
+					agent:     agent,
+					model:     model,
+					provider:  string(detectProvider(r.URL.Path, config.ProviderOpenAI)),
+					streaming: streaming,
+				}
+				*r = *r.WithContext(context.WithValue(r.Context(), budgetContextKey{}, meta))
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -183,6 +276,167 @@ func writeHealthResponse(w http.ResponseWriter) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(payload); err != nil {
+		return
+	}
+}
+
+//nolint:govet // keep fields grouped by response interception lifecycle.
+type budgetTrackingBody struct {
+	statusCode  int
+	buffer      bytes.Buffer
+	once        sync.Once
+	inner       io.ReadCloser
+	manager     *budget.BudgetManager
+	pricing     *pricing.PricingTable
+	logger      *slog.Logger
+	meta        budgetRequestMeta
+	contentType string
+}
+
+func newBudgetTrackingBody(
+	inner io.ReadCloser,
+	statusCode int,
+	contentType string,
+	meta budgetRequestMeta,
+	manager *budget.BudgetManager,
+	pricingTable *pricing.PricingTable,
+	logger *slog.Logger,
+) io.ReadCloser {
+	return &budgetTrackingBody{
+		inner:       inner,
+		statusCode:  statusCode,
+		contentType: contentType,
+		meta:        meta,
+		manager:     manager,
+		pricing:     pricingTable,
+		logger:      logger,
+	}
+}
+
+func (b *budgetTrackingBody) Read(payload []byte) (int, error) {
+	n, err := b.inner.Read(payload)
+	if n > 0 {
+		if _, writeErr := b.buffer.Write(payload[:n]); writeErr != nil && b.logger != nil {
+			b.logger.Warn("failed buffering response body for budget accounting", "error", writeErr)
+		}
+	}
+	if err == io.EOF {
+		b.finalize()
+	}
+	return n, err
+}
+
+// Close closes the upstream response body and triggers final accounting once.
+func (b *budgetTrackingBody) Close() error {
+	err := b.inner.Close()
+	b.finalize()
+	return err
+}
+
+func (b *budgetTrackingBody) finalize() {
+	b.once.Do(func() {
+		if b.statusCode < http.StatusOK || b.statusCode >= http.StatusBadRequest {
+			return
+		}
+		if b.meta.model == "" {
+			return
+		}
+
+		body := b.buffer.Bytes()
+		var usage pricing.Usage
+		if b.meta.streaming || strings.Contains(strings.ToLower(b.contentType), "text/event-stream") {
+			usage = pricing.AccumulateStreamingUsage(b.meta.provider, body, b.logger)
+		} else {
+			usage = pricing.ExtractUsageFromResponse(b.meta.provider, body, b.logger)
+		}
+
+		cost := b.pricing.CalculateCost(b.meta.model, usage.InputTokens, usage.OutputTokens)
+		b.manager.RecordSpend(b.meta.agent, cost)
+	})
+}
+
+func extractModelAndStream(requestBody []byte) (string, bool) {
+	if len(bytes.TrimSpace(requestBody)) == 0 {
+		return "", false
+	}
+
+	var payload struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(requestBody, &payload); err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(payload.Model), payload.Stream
+}
+
+func logDowngrade(logger *slog.Logger, agent string, originalModel string, newModel string) {
+	if logger == nil {
+		return
+	}
+	logger.Info(
+		"auto-downgraded request model",
+		"agent",
+		agent,
+		"original_model",
+		originalModel,
+		"new_model",
+		newModel,
+	)
+}
+
+func writeConfigError(w http.ResponseWriter, message string) {
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"code":    "config_error",
+			"message": message,
+		},
+	})
+	if err != nil {
+		http.Error(w, message, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	if _, err := w.Write(payload); err != nil {
+		return
+	}
+}
+
+func writeBudgetError(w http.ResponseWriter, decision budget.Decision, statusCode int) {
+	code := decision.Code
+	if code == "" {
+		code = "budget_exceeded"
+	}
+
+	message := decision.Message
+	if message == "" {
+		message = fmt.Sprintf(
+			"Agent '%s' has exceeded its %s budget of $%.2f (spent: $%.2f)",
+			decision.Agent,
+			decision.Period,
+			decision.LimitUSD,
+			decision.SpentUSD,
+		)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"code":             code,
+			"message":          message,
+			"agent":            decision.Agent,
+			"budget_limit_usd": decision.LimitUSD,
+			"budget_spent_usd": decision.SpentUSD,
+		},
+	})
+	if err != nil {
+		http.Error(w, message, statusCode)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	if _, err := w.Write(payload); err != nil {
 		return
 	}
