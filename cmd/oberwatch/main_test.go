@@ -15,18 +15,18 @@ func TestNewRootCmd_RegistersCommands(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		command  string
 		name     string
-		command  []string
 		wantName string
 	}{
-		{name: "serve", command: []string{"serve"}, wantName: "serve"},
-		{name: "gate", command: []string{"gate"}, wantName: "gate"},
-		{name: "trace", command: []string{"trace"}, wantName: "trace"},
-		{name: "test", command: []string{"test"}, wantName: "test"},
-		{name: "test run", command: []string{"test", "run"}, wantName: "run"},
-		{name: "validate", command: []string{"validate"}, wantName: "validate"},
-		{name: "init", command: []string{"init"}, wantName: "init"},
-		{name: "version", command: []string{"version"}, wantName: "version"},
+		{name: "serve", command: "serve", wantName: "serve"},
+		{name: "gate", command: "gate", wantName: "gate"},
+		{name: "trace", command: "trace", wantName: "trace"},
+		{name: "test", command: "test", wantName: "test"},
+		{name: "test run", command: "test run", wantName: "run"},
+		{name: "validate", command: "validate", wantName: "validate"},
+		{name: "init", command: "init", wantName: "init"},
+		{name: "version", command: "version", wantName: "version"},
 	}
 
 	for _, tt := range tests {
@@ -35,15 +35,16 @@ func TestNewRootCmd_RegistersCommands(t *testing.T) {
 			t.Parallel()
 
 			root := newRootCmd()
-			cmd, _, err := root.Find(tt.command)
+			parts := strings.Fields(tt.command)
+			cmd, _, err := root.Find(parts)
 			if err != nil {
-				t.Fatalf("Find(%v) error = %v", tt.command, err)
+				t.Fatalf("Find(%v) error = %v", parts, err)
 			}
 			if cmd == nil {
-				t.Fatalf("Find(%v) returned nil command", tt.command)
+				t.Fatalf("Find(%v) returned nil command", parts)
 			}
 			if cmd.Name() != tt.wantName {
-				t.Fatalf("Find(%v) command = %q, want %q", tt.command, cmd.Name(), tt.wantName)
+				t.Fatalf("Find(%v) command = %q, want %q", parts, cmd.Name(), tt.wantName)
 			}
 		})
 	}
@@ -53,44 +54,44 @@ func TestNewRootCmd_DefinesExpectedFlags(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		command []string
-		flags   []string
+		command string
+		flags   string
 		name    string
 	}{
 		{
 			name:    "root global flags",
-			command: []string{},
-			flags:   []string{"config", "log-level", "log-format", "version"},
+			command: "",
+			flags:   "config,log-level,log-format,version",
 		},
 		{
 			name:    "serve flags",
-			command: []string{"serve"},
-			flags:   []string{"port", "host", "admin-token", "no-dashboard", "no-trace", "no-gate"},
+			command: "serve",
+			flags:   "port,host,admin-token,no-dashboard,no-trace,no-gate",
 		},
 		{
 			name:    "gate flags",
-			command: []string{"gate"},
-			flags:   []string{"port", "host", "admin-token"},
+			command: "gate",
+			flags:   "port,host,admin-token",
 		},
 		{
 			name:    "trace flags",
-			command: []string{"trace"},
-			flags:   []string{"port", "storage", "db-path", "retention"},
+			command: "trace",
+			flags:   "port,storage,db-path,retention",
 		},
 		{
 			name:    "test run flags",
-			command: []string{"test", "run"},
-			flags:   []string{"concurrency", "timeout", "output", "output-file", "fail-fast", "filter", "proxy-url", "judge-model", "judge-key", "dry-run"},
+			command: "test run",
+			flags:   "concurrency,timeout,output,output-file,fail-fast,filter,proxy-url,judge-model,judge-key,dry-run",
 		},
 		{
 			name:    "validate inherited config flag",
-			command: []string{"validate"},
-			flags:   []string{"config"},
+			command: "validate",
+			flags:   "config",
 		},
 		{
 			name:    "init flags",
-			command: []string{"init"},
-			flags:   []string{"output", "force"},
+			command: "init",
+			flags:   "output,force",
 		},
 	}
 
@@ -101,15 +102,16 @@ func TestNewRootCmd_DefinesExpectedFlags(t *testing.T) {
 
 			root := newRootCmd()
 			cmd := root
-			if len(tt.command) > 0 {
-				found, _, err := root.Find(tt.command)
+			if tt.command != "" {
+				parts := strings.Fields(tt.command)
+				found, _, err := root.Find(parts)
 				if err != nil {
-					t.Fatalf("Find(%v) error = %v", tt.command, err)
+					t.Fatalf("Find(%v) error = %v", parts, err)
 				}
 				cmd = found
 			}
 
-			for _, name := range tt.flags {
+			for _, name := range splitCSV(tt.flags) {
 				flag := cmd.Flags().Lookup(name)
 				if flag == nil {
 					flag = cmd.PersistentFlags().Lookup(name)
@@ -196,26 +198,26 @@ func TestServeAndGate_BannerReflectsFlags(t *testing.T) {
 
 func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 	tests := []struct {
+		args       string
 		name       string
-		args       []string
 		wantErrSub string
 	}{
 		{
 			name: "trace valid flags",
-			args: []string{"trace", "--port", "8082", "--storage", "memory", "--retention", "24h"},
+			args: "trace --port 8082 --storage memory --retention 24h",
 		},
 		{
 			name:       "trace invalid storage",
-			args:       []string{"trace", "--storage", "bad-storage"},
+			args:       "trace --storage bad-storage",
 			wantErrSub: "--storage must be one of memory, sqlite",
 		},
 		{
 			name: "test run valid flags",
-			args: []string{"test", "run", "--concurrency", "8", "--timeout", "45s", "--output", "json", "--filter", "invoice", "scenarios/"},
+			args: "test run --concurrency 8 --timeout 45s --output json --filter invoice scenarios/",
 		},
 		{
 			name:       "test run invalid output",
-			args:       []string{"test", "run", "--output", "xml"},
+			args:       "test run --output xml",
 			wantErrSub: "--output must be one of console, junit, json",
 		},
 	}
@@ -228,7 +230,8 @@ func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 			root := newRootCmd()
 			root.SetOut(&bytes.Buffer{})
 			root.SetErr(&bytes.Buffer{})
-			root.SetArgs(append([]string{"--config", cfgPath}, tt.args...))
+			args := append([]string{"--config", cfgPath}, strings.Fields(tt.args)...)
+			root.SetArgs(args)
 
 			err := root.Execute()
 			if tt.wantErrSub == "" {
@@ -293,4 +296,16 @@ func writeValidConfig(t *testing.T) string {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return path
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }

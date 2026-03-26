@@ -114,8 +114,8 @@ func newServeCmd(rootOpts *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validatePort(opts.port, "serve --port"); err != nil {
-				return err
+			if validateErr := validatePort(opts.port, "serve --port"); validateErr != nil {
+				return validateErr
 			}
 
 			host := cfg.Server.Host
@@ -193,8 +193,8 @@ func newGateCmd(rootOpts *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validatePort(opts.port, "gate --port"); err != nil {
-				return err
+			if validateErr := validatePort(opts.port, "gate --port"); validateErr != nil {
+				return validateErr
 			}
 
 			host := cfg.Server.Host
@@ -455,8 +455,8 @@ func newInitCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			if err := writeStarterConfig(opts.output, opts.force); err != nil {
-				return err
+			if writeErr := writeStarterConfig(opts.output, opts.force); writeErr != nil {
+				return writeErr
 			}
 
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wrote starter config to %s\n", opts.output)
