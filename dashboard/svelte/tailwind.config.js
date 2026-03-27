@@ -12,6 +12,10 @@ const config = {
         'text-primary': '#E4E4ED',
         'text-secondary': '#8888A0',
         'text-muted': '#555568',
+        success: '#22C55E',
+        warning: '#F59E0B',
+        danger: '#EF4444',
+        info: '#8B5CF6',
         accent: {
           DEFAULT: '#3B82F6',
           hover: '#2563EB'
