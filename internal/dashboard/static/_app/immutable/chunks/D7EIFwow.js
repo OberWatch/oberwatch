@@ -1,1 +1,0 @@
-import{h as o,b as t,K as c,i as u}from"./CkuzA7s8.js";function l(n){throw new Error("https://svelte.dev/e/lifecycle_outside_component")}function r(n){t===null&&l(),c&&t.l!==null?a(t).m.push(n):o(()=>{const e=u(n);if(typeof e=="function")return e})}function a(n){var e=n.l;return e.u??(e.u={a:[],b:[],m:[]})}export{r as o};

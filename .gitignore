@@ -49,3 +49,5 @@ oberwatch
 *.sqlite-shm
 *.sqlite-wal
 .fuse_hidden*
+.air_tmp
+oberwatch.toml

@@ -1,0 +1,25 @@
+root = "."
+tmp_dir = ".air_tmp"
+
+[build]
+  cmd = "go build -o .air_tmp/oberwatch ./cmd/oberwatch"
+  entrypoint = ".air_tmp/oberwatch"
+  args_bin = ["serve"]
+  include_ext = ["go", "toml"]
+  exclude_dir = [
+    ".air_tmp",
+    ".tools",
+    "dashboard",
+    "testdata",
+    "bin",
+  ]
+  delay = 500
+
+[log]
+  time = false
+
+[color]
+  build = "yellow"
+  runner = "green"
+  watcher = "cyan"
+  app = ""

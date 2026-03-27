@@ -51,9 +51,22 @@ make build
 ./bin/oberwatch serve
 ```
 
+### Local Development
+
+```bash
+git clone https://github.com/OberWatch/oberwatch.git
+cd oberwatch
+make dev
+```
+
+`make dev` runs the Go backend with `air` and the Svelte dev server concurrently. The dashboard dev server proxies `/_oberwatch/*` to `http://localhost:8080`.
+
 ## Documentation
 
-See the [docs/](docs/) directory for full documentation.
+Key repo docs:
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [BRANCHING.md](./BRANCHING.md)
+- [CLAUDE.md](./CLAUDE.md)
 
 ## Contributing
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +176,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/login", s.handleLogin)
 	s.mux.HandleFunc(basePath+"/logout", s.handleLogout)
 	s.mux.HandleFunc(basePath+"/settings/password", s.handlePasswordChange)
+	s.mux.HandleFunc(basePath+"/alerts", s.handleAlerts)
 	s.mux.HandleFunc(basePath+"/pricing", s.handlePricing)
 	s.mux.HandleFunc(basePath+"/budgets", s.handleBudgets)
 	s.mux.HandleFunc(basePath+"/budgets/", s.handleBudgetByAgent)
@@ -466,11 +468,15 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	budgetViews := s.budget.ListBudgets()
 	rawCosts, err := s.store.QueryCosts(r.Context(), storage.CostQuery{})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
 		return
+	}
+	budgetViews := s.budget.ListBudgets()
+	budgetByAgent := make(map[string]budget.BudgetView, len(budgetViews))
+	for _, view := range budgetViews {
+		budgetByAgent[view.Agent] = view
 	}
 
 	//nolint:govet // Keep summary fields grouped to mirror /agents response.
@@ -483,28 +489,25 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		BudgetStatus  string
 	}
 
-	summaries := make(map[string]*agentSummary, len(budgetViews)+len(rawCosts))
-	for _, view := range budgetViews {
-		budgetStatus := "under_limit"
-		if view.Status == "killed" {
-			budgetStatus = "killed"
-		} else if view.PercentageUsed >= 100 {
-			budgetStatus = "over_limit"
-		}
-		summaries[view.Agent] = &agentSummary{
-			Name:         view.Agent,
-			Status:       view.Status,
-			BudgetStatus: budgetStatus,
-		}
-	}
-
+	summaries := make(map[string]*agentSummary, len(rawCosts))
 	for _, row := range rawCosts {
 		entry, exists := summaries[row.Agent]
 		if !exists {
+			view, hasBudget := budgetByAgent[row.Agent]
+			status := "unknown"
+			budgetStatus := "under_limit"
+			if hasBudget {
+				status = view.Status
+				if view.Status == "killed" {
+					budgetStatus = "killed"
+				} else if view.PercentageUsed >= 100 {
+					budgetStatus = "over_limit"
+				}
+			}
 			entry = &agentSummary{
 				Name:         row.Agent,
-				Status:       "unknown",
-				BudgetStatus: "under_limit",
+				Status:       status,
+				BudgetStatus: budgetStatus,
 			}
 			summaries[row.Agent] = entry
 		}
@@ -542,6 +545,48 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+}
+
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "storage is not configured", "", 0, 0)
+		return
+	}
+
+	query, err := parseAlertQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "config_error", err.Error(), "", 0, 0)
+		return
+	}
+
+	items, err := s.store.QueryAlerts(r.Context(), query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+		return
+	}
+
+	alerts := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		alerts = append(alerts, map[string]any{
+			"id":            item.ID,
+			"type":          item.Type,
+			"agent":         item.Agent,
+			"message":       item.Message,
+			"severity":      item.Severity,
+			"timestamp":     item.Timestamp.UTC().Format(time.RFC3339),
+			"threshold_pct": item.ThresholdPct,
+			"spent_usd":     item.SpentUSD,
+			"limit_usd":     item.LimitUSD,
+			"action":        item.Action,
+			"data":          item.Data,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"alerts": alerts})
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -657,6 +702,40 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 		parsedTo, err := time.Parse(time.RFC3339, rawTo)
 		if err != nil {
 			return storage.CostQuery{}, fmt.Errorf("invalid to query param: %w", err)
+		}
+		query.To = parsedTo
+	}
+
+	return query, nil
+}
+
+func parseAlertQuery(r *http.Request) (storage.AlertQuery, error) {
+	query := storage.AlertQuery{
+		Agent: strings.TrimSpace(r.URL.Query().Get("agent")),
+		Limit: 0,
+	}
+
+	if rawType := strings.TrimSpace(r.URL.Query().Get("type")); rawType != "" {
+		query.Type = alert.Type(rawType)
+	}
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return storage.AlertQuery{}, fmt.Errorf("invalid limit query param: %w", err)
+		}
+		query.Limit = parsedLimit
+	}
+	if rawFrom := strings.TrimSpace(r.URL.Query().Get("from")); rawFrom != "" {
+		parsedFrom, err := time.Parse(time.RFC3339, rawFrom)
+		if err != nil {
+			return storage.AlertQuery{}, fmt.Errorf("invalid from query param: %w", err)
+		}
+		query.From = parsedFrom
+	}
+	if rawTo := strings.TrimSpace(r.URL.Query().Get("to")); rawTo != "" {
+		parsedTo, err := time.Parse(time.RFC3339, rawTo)
+		if err != nil {
+			return storage.AlertQuery{}, fmt.Errorf("invalid to query param: %w", err)
 		}
 		query.To = parsedTo
 	}

@@ -70,6 +70,10 @@ export interface PricingResponse {
   pricing: ModelPricing[];
 }
 
+export interface AlertsResponse {
+  alerts: Alert[];
+}
+
 export interface Agent {
   name: string;
   status: string;

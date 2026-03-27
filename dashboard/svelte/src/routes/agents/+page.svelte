@@ -40,6 +40,7 @@
   let search = $state('');
   let rows = $state<AgentRow[]>([]);
   let actionBusyByAgent = $state<Record<string, boolean>>({});
+  let proxyURL = $state('');
 
   const filteredRows = $derived.by(() => {
     const term = search.trim().toLowerCase();
@@ -156,6 +157,7 @@
   }
 
   onMount(() => {
+    proxyURL = window.location.origin;
     void loadAgents();
   });
 
@@ -258,9 +260,16 @@
       {/each}
     </div>
   {:else if filteredRows.length === 0}
-    <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-muted">
-      No agents detected yet
-    </div>
+    {#if rows.length === 0}
+      <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-secondary">
+        No agents detected yet. Point your AI agents at <span class="font-mono">{proxyURL}</span> to get
+        started.
+      </div>
+    {:else}
+      <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-muted">
+        No agents match the current filter.
+      </div>
+    {/if}
   {:else}
     <DataTable {columns} rows={filteredRows} {onSort} {cellRenderers} />
   {/if}

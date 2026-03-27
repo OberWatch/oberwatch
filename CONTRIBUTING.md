@@ -20,6 +20,18 @@ make tools
 make build
 ```
 
+### Live Development
+
+```bash
+make dev
+```
+
+This is the default local development workflow. It starts:
+- the Go backend with `air` for rebuild/restart on `.go` changes
+- the Svelte dev server for dashboard hot reload
+
+The dashboard dev server proxies `/_oberwatch/*` to `http://localhost:8080`.
+
 ### Running Tests
 
 ```bash
@@ -34,6 +46,9 @@ make lint
 
 # Format code
 make fmt
+
+# Run local live-reload environment
+make dev
 ```
 
 ## Code Style

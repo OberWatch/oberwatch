@@ -1,10 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { ChartDataset } from 'chart.js';
   import { fetchJSON } from '$lib/api';
   import { connectStream } from '$lib/sse';
   import { AlertItem, KPICard, LineChart } from '$lib/components';
-  import type { Agent, AgentsResponse, Alert, CostBreakdown, CostsResponse, HealthResponse } from '$lib/types';
-  import type { ChartDataset } from 'chart.js';
+  import type {
+    Agent,
+    AgentsResponse,
+    Alert,
+    AlertsResponse,
+    CostBreakdown,
+    CostsResponse,
+    HealthResponse
+  } from '$lib/types';
 
   type HourlyCostBreakdown = CostBreakdown & {
     hour?: string;
@@ -22,33 +30,7 @@
   let uptimeSeconds = $state(0);
   let labels = $state<string[]>([]);
   let values = $state<number[]>([]);
-
-  const mockAlerts: Alert[] = [
-    {
-      id: 'mock-1',
-      type: 'budget_threshold',
-      agent: 'email-agent',
-      message: 'Email agent crossed 80% budget threshold',
-      severity: 'warning',
-      timestamp: new Date(Date.now() - 4 * 60 * 1000).toISOString()
-    },
-    {
-      id: 'mock-2',
-      type: 'runaway_detected',
-      agent: 'qa-agent',
-      message: 'Runaway pattern detected and request rate throttled',
-      severity: 'error',
-      timestamp: new Date(Date.now() - 27 * 60 * 1000).toISOString()
-    },
-    {
-      id: 'mock-3',
-      type: 'budget_exceeded',
-      agent: 'research-agent',
-      message: 'Research agent exceeded daily budget and was downgraded',
-      severity: 'warning',
-      timestamp: new Date(Date.now() - 55 * 60 * 1000).toISOString()
-    }
-  ];
+  let recentAlerts = $state<Alert[]>([]);
 
   const lineDatasets = $derived<ChartDataset<'line', number[]>[]>([
     {
@@ -68,6 +50,7 @@
   }
 
   function formatUptime(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -92,10 +75,11 @@
 
     try {
       const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const [costs, agentsRes, health] = await Promise.all([
+      const [costs, agentsRes, health, alertsRes] = await Promise.all([
         fetchJSON<CostsResponse>(`/costs?group_by=hour&from=${encodeURIComponent(from)}`),
         fetchJSON<AgentsResponse>('/agents'),
-        fetchJSON<HealthResponse>('/health')
+        fetchJSON<HealthResponse>('/health'),
+        fetchJSON<AlertsResponse>(`/alerts?from=${encodeURIComponent(from)}`)
       ]);
 
       const hourly = costs.breakdown as HourlyCostBreakdown[];
@@ -104,11 +88,11 @@
 
       totalSpendToday = costs.total_usd;
       activeAgents = agentsRes.agents.filter((agent: Agent) => agent.status === 'active').length;
-      alertsToday = mockAlerts.length;
+      alertsToday = alertsRes.alerts.length;
       uptimeSeconds = health.uptime_seconds;
+      recentAlerts = alertsRes.alerts.slice(0, 5);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load overview data.';
-      errorMessage = message;
+      errorMessage = err instanceof Error ? err.message : 'Failed to load overview data.';
     } finally {
       loading = false;
     }
@@ -123,8 +107,7 @@
       await fetchJSON('/kill-all', { method: 'POST' });
       await loadOverview();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Emergency stop failed.';
-      errorMessage = message;
+      errorMessage = err instanceof Error ? err.message : 'Emergency stop failed.';
     }
   }
 
@@ -132,7 +115,7 @@
     void loadOverview();
 
     const stream = connectStream((eventName) => {
-      if (eventName === 'cost_update') {
+      if (eventName === 'cost_update' || eventName === 'budget_alert' || eventName === 'agent_killed') {
         void loadOverview();
       }
     });
@@ -162,38 +145,43 @@
     </div>
   {/if}
 
-  {#if loading}
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {#each Array.from({ length: 4 }) as _, index (index)}
-        <div class="h-28 animate-pulse rounded-lg border border-border-default bg-surface"></div>
-      {/each}
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <KPICard title="Total Spend Today" value={formatUSD(totalSpendToday)} subtitle="Last 24 hours" />
+    <KPICard title="Active Agents" value={activeAgents} subtitle="Currently serving traffic" />
+    <div class={alertsToday > 0 ? 'rounded-lg ring-1 ring-warning/60' : ''}>
+      <KPICard
+        title="Alerts Today"
+        value={alertsToday}
+        subtitle="Recent alert events"
+        trend={alertsToday > 0 ? 'down' : 'up'}
+        trendLabel={alertsToday > 0 ? 'Needs attention' : 'All clear'}
+      />
     </div>
-  {:else}
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <KPICard title="Total Spend Today" value={formatUSD(totalSpendToday)} subtitle="Last 24 hours" />
-      <KPICard title="Active Agents" value={activeAgents} subtitle="Currently serving traffic" />
-      <div class={alertsToday > 0 ? 'rounded-lg ring-1 ring-warning/60' : ''}>
-        <KPICard
-          title="Alerts Today"
-          value={alertsToday}
-          subtitle="Recent alert events"
-          trend={alertsToday > 0 ? 'down' : 'up'}
-          trendLabel={alertsToday > 0 ? 'Needs attention' : 'All clear'}
-        />
-      </div>
-      <KPICard title="Uptime" value={formatUptime(uptimeSeconds)} subtitle="Proxy process uptime" />
-    </div>
-  {/if}
+    <KPICard title="Uptime" value={formatUptime(uptimeSeconds)} subtitle="Proxy process uptime" />
+  </div>
 
-  <LineChart {labels} datasets={lineDatasets} height={320} />
+  {#if loading}
+    <section class="flex h-[320px] items-center justify-center rounded-lg border border-border-default bg-surface p-4 text-sm text-text-secondary">
+      Loading overview data...
+    </section>
+  {:else if values.length === 0}
+    <section class="flex h-[320px] items-center justify-center rounded-lg border border-border-default bg-surface p-4 text-center text-sm text-text-secondary">
+      No cost data yet. Proxy some requests to see cost trends.
+    </section>
+  {:else}
+    <LineChart {labels} datasets={lineDatasets} height={320} />
+  {/if}
 
   <section class="space-y-3 rounded-lg border border-border-default bg-surface p-4">
     <h2 class="text-lg font-semibold text-text-primary">Recent Alerts</h2>
-    {#if mockAlerts.length === 0}
-      <p class="text-sm text-text-muted">No alerts yet.</p>
+    {#if recentAlerts.length === 0}
+      <div class="flex items-center gap-2 text-sm text-text-secondary">
+        <span class="h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true"></span>
+        <span>No alerts. Everything is running smoothly.</span>
+      </div>
     {:else}
       <div class="space-y-2">
-        {#each mockAlerts.slice(0, 5) as alert (alert.id)}
+        {#each recentAlerts as alert (alert.id)}
           <AlertItem {alert} />
         {/each}
       </div>

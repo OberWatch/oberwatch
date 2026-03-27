@@ -190,9 +190,23 @@ At the end of every coding task, run these commands from the `oberwatch/` repo r
   - `COVERAGE=$(PATH=/usr/local/go/bin:$PATH /usr/local/go/bin/go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//') && echo "Total coverage: ${COVERAGE}%" && if (( $(echo "$COVERAGE < 80" | bc -l) )); then echo "Coverage ${COVERAGE}% is below 80% threshold"; exit 1; fi`
 5. Vet:
   - `PATH=/usr/local/go/bin:$PATH GOCACHE=/tmp/go-build /usr/local/go/bin/go vet ./...`
+6. Dashboard deps:
+  - `cd dashboard/svelte && npm ci`
+7. Dashboard build:
+  - `cd dashboard/svelte && npm run build`
+8. Dashboard check:
+  - `cd dashboard/svelte && npm run check`
+9. TypeScript linting:
+  - `cd dashboard/svelte && npm run lint:ts`
 
 If all checks pass, automatically generate a Conventional Commit message proposal summarizing the change.
 Do not create or amend a commit unless explicitly requested by the user.
+
+## Local Development Workflow (MANDATORY)
+
+- Use `make dev` from the `oberwatch/` repo root for active implementation and manual local testing.
+- `make dev` runs the Go backend with `air` and the Svelte dev server concurrently.
+- The Svelte dev server must proxy `/_oberwatch/*` requests to `http://localhost:8080`.
 
 ---
 

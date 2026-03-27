@@ -1,4 +1,5 @@
-.PHONY: tools build run test test-race lint clean fmt vet dashboard
+SHELL := /bin/bash
+.PHONY: tools build run dev test test-race lint clean fmt vet dashboard
 
 BINARY_NAME := oberwatch
 BUILD_DIR := bin
@@ -45,6 +46,11 @@ vet:
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
+
+# Run Go backend (air) and Svelte dev server concurrently with hot reload
+dev:
+	cd dashboard/svelte && npm install --prefer-offline 2>/dev/null || npm install
+	@trap 'kill 0' SIGINT SIGTERM EXIT; air & (cd dashboard/svelte && npm run dev) & wait
 
 # Build the SvelteKit dashboard
 dashboard:

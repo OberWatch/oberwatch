@@ -53,6 +53,23 @@ func TestServer_EndpointStatusAndShape(t *testing.T) {
 			},
 		},
 		{
+			name:   "alerts endpoint",
+			method: http.MethodGet,
+			path:   basePath + "/alerts",
+			auth:   true,
+			prepare: func(t *testing.T, _ *budget.BudgetManager, store storage.Store) {
+				t.Helper()
+				seedAlerts(t, store, []alert.Alert{
+					alert.NewBudgetThresholdAlert("email-agent", 80, 8, 10, "threshold", time.Now().UTC()),
+				})
+			},
+			wantStatus: http.StatusOK,
+			assertResponse: func(t *testing.T, _ *http.Response, payload map[string]any) {
+				t.Helper()
+				mustHaveKeys(t, payload, "alerts")
+			},
+		},
+		{
 			name:       "pricing endpoint",
 			method:     http.MethodGet,
 			path:       basePath + "/pricing",
@@ -741,6 +758,29 @@ func TestServer_SetupLoginLogoutAndPasswordChange(t *testing.T) {
 	}
 }
 
+func TestServer_AgentsEndpointExcludesConfiguredButUnusedAgents(t *testing.T) {
+	t.Parallel()
+
+	server, _, store := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, basePath+"/agents", nil)
+	addAuthenticatedSessionCookie(t, store, req)
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	payload := decodeJSONMap(t, recorder.Result().Body)
+	agentsValue, ok := payload["agents"].([]any)
+	if !ok {
+		t.Fatalf("agents type = %T, want []any", payload["agents"])
+	}
+	if len(agentsValue) != 0 {
+		t.Fatalf("len(agents) = %d, want 0", len(agentsValue))
+	}
+}
+
 func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store) {
 	t.Helper()
 
@@ -819,6 +859,17 @@ func seedCostRecords(t *testing.T, store storage.Store, records []storage.CostRe
 	for _, record := range records {
 		if err := store.SaveCostRecord(ctx, record); err != nil {
 			t.Fatalf("SaveCostRecord() error = %v", err)
+		}
+	}
+}
+
+func seedAlerts(t *testing.T, store storage.Store, records []alert.Alert) {
+	t.Helper()
+
+	ctx := context.Background()
+	for _, record := range records {
+		if err := store.SaveAlert(ctx, record); err != nil {
+			t.Fatalf("SaveAlert() error = %v", err)
 		}
 	}
 }
