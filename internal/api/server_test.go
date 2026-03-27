@@ -15,9 +15,14 @@ import (
 	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
 	"github.com/OberWatch/oberwatch/internal/storage"
+	"golang.org/x/crypto/bcrypt"
 )
 
-const testAdminToken = "test-admin-token"
+const (
+	testAdminPassword = "super-secret-password"
+	testAdminUsername = "admin"
+	testSessionToken  = "session-token-1234567890abcdefsession-token-1234567890abcdef"
+)
 
 func TestServer_EndpointStatusAndShape(t *testing.T) {
 	t.Parallel()
@@ -216,7 +221,7 @@ func TestServer_EndpointStatusAndShape(t *testing.T) {
 				request.Header.Set("Content-Type", "application/json")
 			}
 			if tt.auth {
-				request.Header.Set("Authorization", "Bearer "+testAdminToken)
+				addAuthenticatedSessionCookie(t, store, request)
 			}
 
 			recorder := httptest.NewRecorder()
@@ -260,18 +265,38 @@ func TestServer_StreamEndpointStatusAndContentType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, _, _ := newTestServer(t)
-			ctx := context.Background()
+			server, _, store := newTestServer(t)
 			if tt.withAuth {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(context.Background())
+				authReq := httptest.NewRequest(http.MethodGet, basePath+"/stream", nil)
+				addAuthenticatedSessionCookie(t, store, authReq)
+				if !server.authorized(authReq) {
+					t.Fatal("authorized(authReq) = false, want true")
+				}
+
+				ctx, cancel := context.WithCancel(context.Background())
+				request := httptest.NewRequest(http.MethodGet, basePath+"/stream", nil).WithContext(ctx)
+				addAuthenticatedSessionCookie(t, store, request)
+
+				recorder := httptest.NewRecorder()
+				done := make(chan struct{})
+				go func() {
+					server.handleStream(recorder, request)
+					close(done)
+				}()
 				cancel()
-			}
-			request := httptest.NewRequest(http.MethodGet, basePath+"/stream", nil).WithContext(ctx)
-			if tt.withAuth {
-				request.Header.Set("Authorization", "Bearer "+testAdminToken)
+				<-done
+
+				response := recorder.Result()
+				if response.StatusCode != tt.wantStatus {
+					t.Fatalf("status code = %d, want %d", response.StatusCode, tt.wantStatus)
+				}
+				if !strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
+					t.Fatalf("Content-Type = %q, want text/event-stream", response.Header.Get("Content-Type"))
+				}
+				return
 			}
 
+			request := httptest.NewRequest(http.MethodGet, basePath+"/stream", nil)
 			recorder := httptest.NewRecorder()
 			server.ServeHTTP(recorder, request)
 
@@ -290,16 +315,16 @@ func TestServer_AuthMiddleware(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		authorization string
-		path          string
-		wantStatus    int
+		name       string
+		path       string
+		withCookie bool
+		wantStatus int
 	}{
-		{name: "missing token rejected", authorization: "", path: basePath + "/budgets", wantStatus: http.StatusUnauthorized},
-		{name: "wrong token rejected", authorization: "Bearer wrong", path: basePath + "/budgets", wantStatus: http.StatusUnauthorized},
-		{name: "correct token allowed", authorization: "Bearer " + testAdminToken, path: basePath + "/budgets", wantStatus: http.StatusOK},
-		{name: "health bypasses auth", authorization: "", path: basePath + "/health", wantStatus: http.StatusOK},
-		{name: "pricing bypasses auth", authorization: "", path: basePath + "/pricing", wantStatus: http.StatusOK},
+		{name: "missing session rejected", path: basePath + "/budgets", wantStatus: http.StatusUnauthorized},
+		{name: "valid session allowed", path: basePath + "/budgets", withCookie: true, wantStatus: http.StatusOK},
+		{name: "health bypasses auth", path: basePath + "/health", wantStatus: http.StatusOK},
+		{name: "auth status bypasses auth", path: basePath + "/auth/status", wantStatus: http.StatusOK},
+		{name: "setup bypasses auth", path: basePath + "/setup", wantStatus: http.StatusMethodNotAllowed},
 	}
 
 	for _, tt := range tests {
@@ -307,10 +332,10 @@ func TestServer_AuthMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, _, _ := newTestServer(t)
+			server, _, store := newTestServer(t)
 			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			if tt.authorization != "" {
-				request.Header.Set("Authorization", tt.authorization)
+			if tt.withCookie {
+				addAuthenticatedSessionCookie(t, store, request)
 			}
 			recorder := httptest.NewRecorder()
 			server.ServeHTTP(recorder, request)
@@ -345,10 +370,10 @@ func TestServer_BudgetUpdatePersists(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, _, _ := newTestServer(t)
+			server, _, store := newTestServer(t)
 
 			putReq := httptest.NewRequest(http.MethodPut, basePath+"/budgets/email-agent", strings.NewReader(tt.body))
-			putReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+			addAuthenticatedSessionCookie(t, store, putReq)
 			putReq.Header.Set("Content-Type", "application/json")
 			putRecorder := httptest.NewRecorder()
 			server.ServeHTTP(putRecorder, putReq)
@@ -357,7 +382,7 @@ func TestServer_BudgetUpdatePersists(t *testing.T) {
 			}
 
 			getReq := httptest.NewRequest(http.MethodGet, basePath+"/budgets/email-agent", nil)
-			getReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+			addAuthenticatedSessionCookie(t, store, getReq)
 			getRecorder := httptest.NewRecorder()
 			server.ServeHTTP(getRecorder, getReq)
 			if getRecorder.Code != http.StatusOK {
@@ -389,20 +414,20 @@ func TestServer_KillAndEnableToggleStatus(t *testing.T) {
 		{name: "enable restores status to active", actionPath: "/enable", wantStatus: "active"},
 	}
 
-	server, _, _ := newTestServer(t)
+	server, _, store := newTestServer(t)
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.actionPath == "/enable" {
 				killReq := httptest.NewRequest(http.MethodPost, basePath+"/budgets/email-agent/kill", nil)
-				killReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+				addAuthenticatedSessionCookie(t, store, killReq)
 				killRecorder := httptest.NewRecorder()
 				server.ServeHTTP(killRecorder, killReq)
 			}
 
 			actionReq := httptest.NewRequest(http.MethodPost, basePath+"/budgets/email-agent"+tt.actionPath, nil)
-			actionReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+			addAuthenticatedSessionCookie(t, store, actionReq)
 			actionRecorder := httptest.NewRecorder()
 			server.ServeHTTP(actionRecorder, actionReq)
 			if actionRecorder.Code != http.StatusOK {
@@ -410,7 +435,7 @@ func TestServer_KillAndEnableToggleStatus(t *testing.T) {
 			}
 
 			getReq := httptest.NewRequest(http.MethodGet, basePath+"/budgets/email-agent", nil)
-			getReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+			addAuthenticatedSessionCookie(t, store, getReq)
 			getRecorder := httptest.NewRecorder()
 			server.ServeHTTP(getRecorder, getReq)
 			payload := decodeJSONMap(t, getRecorder.Result().Body)
@@ -456,7 +481,7 @@ func TestServer_CostFiltering(t *testing.T) {
 			})
 
 			req := httptest.NewRequest(http.MethodGet, basePath+"/costs"+tt.query, nil)
-			req.Header.Set("Authorization", "Bearer "+testAdminToken)
+			addAuthenticatedSessionCookie(t, store, req)
 			recorder := httptest.NewRecorder()
 			server.ServeHTTP(recorder, req)
 			if recorder.Code != http.StatusOK {
@@ -560,11 +585,166 @@ func TestServer_StreamSendsCostAndAlertEvents(t *testing.T) {
 	}
 }
 
+func TestServer_SetupLoginLogoutAndPasswordChange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name func(*testing.T)
+	}{
+		{
+			name: func(t *testing.T) {
+				t.Helper()
+
+				server, _, store := newTestServer(t)
+				setupReq := httptest.NewRequest(http.MethodPost, basePath+"/setup", strings.NewReader(`{"username":"admin","password":"pw123","confirm_password":"pw123"}`))
+				setupReq.Header.Set("Content-Type", "application/json")
+				setupRecorder := httptest.NewRecorder()
+				server.ServeHTTP(setupRecorder, setupReq)
+				if setupRecorder.Code != http.StatusOK {
+					t.Fatalf("setup status = %d, want %d", setupRecorder.Code, http.StatusOK)
+				}
+
+				setupValue, found, err := store.GetSetting(context.Background(), setupCompleteKey)
+				if err != nil {
+					t.Fatalf("GetSetting(setup_complete) error = %v", err)
+				}
+				if !found || setupValue != "true" {
+					t.Fatalf("setup_complete = (%q, %v), want (true, true)", setupValue, found)
+				}
+
+				secondReq := httptest.NewRequest(http.MethodPost, basePath+"/setup", strings.NewReader(`{"username":"admin","password":"pw123","confirm_password":"pw123"}`))
+				secondReq.Header.Set("Content-Type", "application/json")
+				secondRecorder := httptest.NewRecorder()
+				server.ServeHTTP(secondRecorder, secondReq)
+				if secondRecorder.Code != http.StatusConflict {
+					t.Fatalf("second setup status = %d, want %d", secondRecorder.Code, http.StatusConflict)
+				}
+			},
+		},
+		{
+			name: func(t *testing.T) {
+				t.Helper()
+
+				server, _, store := newTestServer(t)
+				seedAdminCredentials(t, store)
+
+				loginCases := []struct {
+					name       string
+					body       string
+					wantStatus int
+				}{
+					{name: "correct credentials", body: `{"username":"admin","password":"` + testAdminPassword + `"}`, wantStatus: http.StatusOK},
+					{name: "incorrect credentials", body: `{"username":"admin","password":"wrong"}`, wantStatus: http.StatusUnauthorized},
+				}
+
+				for _, tc := range loginCases {
+					tc := tc
+					t.Run(tc.name, func(t *testing.T) {
+						t.Parallel()
+
+						req := httptest.NewRequest(http.MethodPost, basePath+"/login", strings.NewReader(tc.body))
+						req.Header.Set("Content-Type", "application/json")
+						recorder := httptest.NewRecorder()
+						server.ServeHTTP(recorder, req)
+						if recorder.Code != tc.wantStatus {
+							t.Fatalf("login status = %d, want %d", recorder.Code, tc.wantStatus)
+						}
+					})
+				}
+			},
+		},
+		{
+			name: func(t *testing.T) {
+				t.Helper()
+
+				server, _, store := newTestServer(t)
+				req := httptest.NewRequest(http.MethodPost, basePath+"/logout", nil)
+				addAuthenticatedSessionCookie(t, store, req)
+				recorder := httptest.NewRecorder()
+				server.ServeHTTP(recorder, req)
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("logout status = %d, want %d", recorder.Code, http.StatusOK)
+				}
+
+				_, found, err := store.GetSetting(context.Background(), sessionTokenKey)
+				if err != nil {
+					t.Fatalf("GetSetting(session_token) error = %v", err)
+				}
+				if found {
+					t.Fatal("session_token still exists after logout")
+				}
+			},
+		},
+		{
+			name: func(t *testing.T) {
+				t.Helper()
+
+				server, _, store := newTestServer(t)
+				seedAdminCredentials(t, store)
+				sessionToken := seedSession(t, store, time.Now().UTC().Add(24*time.Hour))
+
+				passwordCases := []struct {
+					name       string
+					body       string
+					wantStatus int
+				}{
+					{
+						name:       "correct current password",
+						body:       `{"current_password":"` + testAdminPassword + `","new_password":"new-secret","confirm_password":"new-secret"}`,
+						wantStatus: http.StatusOK,
+					},
+					{
+						name:       "incorrect current password",
+						body:       `{"current_password":"wrong","new_password":"new-secret","confirm_password":"new-secret"}`,
+						wantStatus: http.StatusUnauthorized,
+					},
+				}
+
+				for _, tc := range passwordCases {
+					tc := tc
+					t.Run(tc.name, func(t *testing.T) {
+						t.Parallel()
+
+						req := httptest.NewRequest(http.MethodPut, basePath+"/settings/password", strings.NewReader(tc.body))
+						req.Header.Set("Content-Type", "application/json")
+						req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionToken})
+						recorder := httptest.NewRecorder()
+						server.ServeHTTP(recorder, req)
+						if recorder.Code != tc.wantStatus {
+							t.Fatalf("password change status = %d, want %d", recorder.Code, tc.wantStatus)
+						}
+					})
+				}
+			},
+		},
+		{
+			name: func(t *testing.T) {
+				t.Helper()
+
+				server, _, store := newTestServer(t)
+				seedAdminCredentials(t, store)
+				expiredToken := seedSession(t, store, time.Now().UTC().Add(-1*time.Minute))
+
+				req := httptest.NewRequest(http.MethodGet, basePath+"/budgets", nil)
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: expiredToken})
+				recorder := httptest.NewRecorder()
+				server.ServeHTTP(recorder, req)
+				if recorder.Code != http.StatusUnauthorized {
+					t.Fatalf("expired session status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+				}
+			},
+		},
+	}
+
+	for idx, tt := range tests {
+		t.Run(string(rune('a'+idx)), tt.name)
+	}
+}
+
 func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store) {
 	t.Helper()
 
 	cfg := config.DefaultConfig()
-	cfg.Server.AdminToken = testAdminToken
 	cfg.Gate.Agents = []config.AgentBudgetConfig{
 		{
 			Name:           "email-agent",
@@ -587,6 +767,49 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 
 	server := New(cfg, manager, sqliteStore, "0.1.0")
 	return server, manager, sqliteStore
+}
+
+func addAuthenticatedSessionCookie(t *testing.T, store storage.Store, req *http.Request) {
+	t.Helper()
+
+	token := seedSession(t, store, time.Now().UTC().Add(24*time.Hour))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+}
+
+func seedAdminCredentials(t *testing.T, store storage.Store) {
+	t.Helper()
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(testAdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword() error = %v", err)
+	}
+
+	ctx := context.Background()
+	settings := map[string]string{
+		adminUsernameKey:     testAdminUsername,
+		adminPasswordHashKey: string(passwordHash),
+		setupCompleteKey:     "true",
+	}
+	for key, value := range settings {
+		if err := store.SetSetting(ctx, key, value); err != nil {
+			t.Fatalf("SetSetting(%q) error = %v", key, err)
+		}
+	}
+}
+
+func seedSession(t *testing.T, store storage.Store, expiresAt time.Time) string {
+	t.Helper()
+
+	seedAdminCredentials(t, store)
+
+	ctx := context.Background()
+	if err := store.SetSetting(ctx, sessionTokenKey, testSessionToken); err != nil {
+		t.Fatalf("SetSetting(session_token) error = %v", err)
+	}
+	if err := store.SetSetting(ctx, sessionExpiresAtKey, expiresAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("SetSetting(session_expires_at) error = %v", err)
+	}
+	return testSessionToken
 }
 
 func seedCostRecords(t *testing.T, store storage.Store, records []storage.CostRecord) {

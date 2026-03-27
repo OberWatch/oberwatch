@@ -30,7 +30,6 @@ type Server struct {
 
 	startedAt      time.Time
 	providerHealth map[string]string
-	adminToken     string
 	version        string
 	storageBackend string
 	pricing        []config.PricingEntry
@@ -62,7 +61,6 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 		store:          store,
 		mux:            http.NewServeMux(),
 		startedAt:      time.Now().UTC(),
-		adminToken:     strings.TrimSpace(cfg.Server.AdminToken),
 		version:        version,
 		storageBackend: string(cfg.Trace.Storage),
 		pricing:        append([]config.PricingEntry(nil), cfg.Pricing...),
@@ -85,7 +83,7 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !isPublicEndpoint(r.URL.Path) {
 		if !s.authorized(r) {
-			writeError(w, http.StatusUnauthorized, "auth_required", "Missing or invalid admin token", "", 0, 0)
+			writeError(w, http.StatusUnauthorized, "auth_required", "Missing or invalid session", "", 0, 0)
 			return
 		}
 	}
@@ -93,7 +91,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func isPublicEndpoint(path string) bool {
-	return path == basePath+"/health" || path == basePath+"/pricing"
+	switch path {
+	case basePath + "/health",
+		basePath + "/auth/status",
+		basePath + "/setup",
+		basePath + "/login":
+		return true
+	default:
+		return false
+	}
 }
 
 // PublishCostUpdate broadcasts a cost_update SSE event.
@@ -164,6 +170,11 @@ func (s *Server) WrapDispatcher(next budget.Dispatcher) budget.Dispatcher {
 
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/health", s.handleHealth)
+	s.mux.HandleFunc(basePath+"/auth/status", s.handleAuthStatus)
+	s.mux.HandleFunc(basePath+"/setup", s.handleSetup)
+	s.mux.HandleFunc(basePath+"/login", s.handleLogin)
+	s.mux.HandleFunc(basePath+"/logout", s.handleLogout)
+	s.mux.HandleFunc(basePath+"/settings/password", s.handlePasswordChange)
 	s.mux.HandleFunc(basePath+"/pricing", s.handlePricing)
 	s.mux.HandleFunc(basePath+"/budgets", s.handleBudgets)
 	s.mux.HandleFunc(basePath+"/budgets/", s.handleBudgetByAgent)
@@ -597,19 +608,6 @@ func (s *Server) unsubscribe(channel chan sseEvent) {
 	delete(s.broker.clients, channel)
 	close(channel)
 	s.broker.mu.Unlock()
-}
-
-func (s *Server) authorized(r *http.Request) bool {
-	if strings.TrimSpace(s.adminToken) == "" {
-		return false
-	}
-
-	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-	parts := strings.Fields(authorization)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return false
-	}
-	return parts[1] == s.adminToken
 }
 
 func parseBudgetPath(path string) (string, string, bool) {

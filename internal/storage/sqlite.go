@@ -16,7 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
 
 // SQLiteStore persists Oberwatch data in SQLite.
 //
@@ -155,6 +155,12 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 				last_alerted_pct REAL NOT NULL,
 				killed INTEGER NOT NULL,
 				updated_at TEXT NOT NULL
+			);`,
+		},
+		2: {
+			`CREATE TABLE IF NOT EXISTS settings (
+				key TEXT PRIMARY KEY,
+				value TEXT NOT NULL
 			);`,
 		},
 	}
@@ -557,6 +563,41 @@ func (s *SQLiteStore) LoadBudgetSnapshots(ctx context.Context) ([]BudgetSnapshot
 	}
 
 	return snapshots, nil
+}
+
+// GetSetting returns one setting value by key.
+func (s *SQLiteStore) GetSetting(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", strings.TrimSpace(key)).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("query setting %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+// SetSetting upserts one setting value by key.
+func (s *SQLiteStore) SetSetting(ctx context.Context, key string, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value)
+		VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, strings.TrimSpace(key), value)
+	if err != nil {
+		return fmt.Errorf("upsert setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// DeleteSetting removes one setting value by key.
+func (s *SQLiteStore) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", strings.TrimSpace(key))
+	if err != nil {
+		return fmt.Errorf("delete setting %q: %w", key, err)
+	}
+	return nil
 }
 
 // CleanupRetention deletes records older than configured retention.

@@ -40,10 +40,10 @@ func TestServer_MethodNotAllowedResponses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, _, _ := newTestServer(t)
+			server, _, store := newTestServer(t)
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			if tt.auth {
-				req.Header.Set("Authorization", "Bearer "+testAdminToken)
+				addAuthenticatedSessionCookie(t, store, req)
 			}
 
 			recorder := httptest.NewRecorder()
@@ -75,8 +75,8 @@ func TestServer_ErrorResponses(t *testing.T) {
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
-				return New(cfg, nil, nil, "0.1.0")
+				_, _, store := newTestServer(t)
+				return New(cfg, nil, store, "0.1.0")
 			},
 			method:     http.MethodGet,
 			path:       basePath + "/budgets",
@@ -113,7 +113,6 @@ func TestServer_ErrorResponses(t *testing.T) {
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
 				sqliteServer, _, store := newTestServer(t)
 				_ = sqliteServer
 				return New(cfg, nil, store, "0.1.0")
@@ -136,25 +135,23 @@ func TestServer_ErrorResponses(t *testing.T) {
 			wantCode:   "config_error",
 		},
 		{
-			name: "costs without store",
+			name: "costs without store returns unauthorized",
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
 				manager := budget.NewManager(cfg.Gate, nil)
 				return New(cfg, manager, nil, "0.1.0")
 			},
 			method:     http.MethodGet,
 			path:       basePath + "/costs",
-			wantStatus: http.StatusInternalServerError,
-			wantCode:   "config_error",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "auth_required",
 		},
 		{
 			name: "costs query store failure",
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
 				manager := budget.NewManager(cfg.Gate, nil)
 				return New(cfg, manager, failingStore{queryCostsErr: errors.New("boom")}, "0.1.0")
 			},
@@ -180,7 +177,6 @@ func TestServer_ErrorResponses(t *testing.T) {
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
 				manager := budget.NewManager(cfg.Gate, nil)
 				return New(cfg, manager, failingStore{queryCostsErr: errors.New("boom")}, "0.1.0")
 			},
@@ -194,8 +190,8 @@ func TestServer_ErrorResponses(t *testing.T) {
 			build: func(t *testing.T) *Server {
 				t.Helper()
 				cfg := config.DefaultConfig()
-				cfg.Server.AdminToken = testAdminToken
-				return New(cfg, nil, nil, "0.1.0")
+				_, _, store := newTestServer(t)
+				return New(cfg, nil, store, "0.1.0")
 			},
 			method:     http.MethodGet,
 			path:       basePath + "/agents",
@@ -223,8 +219,8 @@ func TestServer_ErrorResponses(t *testing.T) {
 
 			server := tt.build(t)
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
-			if tt.wantCode != "auth_required" {
-				req.Header.Set("Authorization", "Bearer "+testAdminToken)
+			if tt.wantCode != "auth_required" && server.store != nil {
+				addAuthenticatedSessionCookie(t, server.store, req)
 			}
 			if tt.body != "" {
 				req.Header.Set("Content-Type", "application/json")
@@ -446,6 +442,27 @@ func (f failingStore) SaveBudgetSnapshot(context.Context, storage.BudgetSnapshot
 
 func (f failingStore) LoadBudgetSnapshots(context.Context) ([]storage.BudgetSnapshot, error) {
 	return nil, nil
+}
+
+func (f failingStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	switch key {
+	case sessionTokenKey:
+		return testSessionToken, true, nil
+	case sessionExpiresAtKey:
+		return time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano), true, nil
+	case setupCompleteKey:
+		return "true", true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+func (f failingStore) SetSetting(context.Context, string, string) error {
+	return nil
+}
+
+func (f failingStore) DeleteSetting(context.Context, string) error {
+	return nil
 }
 
 func assertErrorCode(t *testing.T, body io.Reader, wantCode string) {

@@ -12,6 +12,11 @@ export interface HealthResponse {
   providers: ProviderStatus;
 }
 
+export interface AuthStatusResponse {
+  setup_complete: boolean;
+  authenticated: boolean;
+}
+
 export interface Budget {
   agent: string;
   period: string;

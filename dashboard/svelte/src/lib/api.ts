@@ -2,13 +2,6 @@ import type { APIErrorResponse } from '$lib/types';
 
 const API_BASE = '/_oberwatch/api/v1';
 
-function getToken(): string {
-  if (typeof localStorage === 'undefined') {
-    return '';
-  }
-  return localStorage.getItem('oberwatch_admin_token') ?? '';
-}
-
 export class ApiError extends Error {
   status: number;
   details?: APIErrorResponse;
@@ -23,8 +16,8 @@ export class ApiError extends Error {
 
 export async function fetchJSON<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'same-origin',
     headers: {
-      Authorization: `Bearer ${getToken()}`,
       'Content-Type': 'application/json',
       ...(options.headers ?? {})
     },
@@ -60,8 +53,8 @@ export async function fetchJSON<T>(path: string, options: RequestInit = {}): Pro
 
 export async function fetchBlob(path: string, options: RequestInit = {}): Promise<Blob> {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'same-origin',
     headers: {
-      Authorization: `Bearer ${getToken()}`,
       ...(options.headers ?? {})
     },
     ...options

@@ -15,6 +15,9 @@ type Store interface {
 	QueryAlerts(context.Context, AlertQuery) ([]alert.Alert, error)
 	SaveBudgetSnapshot(context.Context, BudgetSnapshot) error
 	LoadBudgetSnapshots(context.Context) ([]BudgetSnapshot, error)
+	GetSetting(context.Context, string) (string, bool, error)
+	SetSetting(context.Context, string, string) error
+	DeleteSetting(context.Context, string) error
 }
 
 // CostRecord captures one persisted proxied request billing event.

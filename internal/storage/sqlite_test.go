@@ -40,6 +40,7 @@ func TestSQLiteStore_SchemaAutoCreation(t *testing.T) {
 		{name: "cost records table exists", tableName: "cost_records"},
 		{name: "alerts table exists", tableName: "alerts"},
 		{name: "budget snapshots table exists", tableName: "budget_snapshots"},
+		{name: "settings table exists", tableName: "settings"},
 		{name: "schema migrations table exists", tableName: "schema_migrations"},
 	}
 
@@ -255,6 +256,73 @@ func TestSQLiteStore_RetentionCleanup(t *testing.T) {
 	}
 	if len(remainingAlerts) != 1 {
 		t.Fatalf("remaining alerts = %d, want 1", len(remainingAlerts))
+	}
+}
+
+func TestSQLiteStore_SettingsCRUD(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		key       string
+		value     string
+		wantFound bool
+	}{
+		{name: "missing setting returns not found", key: "missing", wantFound: false},
+		{name: "stored setting returns found", key: "admin_username", value: "admin", wantFound: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.wantFound {
+				if err := store.SetSetting(ctx, tt.key, tt.value); err != nil {
+					t.Fatalf("SetSetting() error = %v", err)
+				}
+			}
+
+			got, found, err := store.GetSetting(ctx, tt.key)
+			if err != nil {
+				t.Fatalf("GetSetting() error = %v", err)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("GetSetting() found = %v, want %v", found, tt.wantFound)
+			}
+			if found && got != tt.value {
+				t.Fatalf("GetSetting() value = %q, want %q", got, tt.value)
+			}
+		})
+	}
+
+	if err := store.SetSetting(ctx, "session_token", "first"); err != nil {
+		t.Fatalf("SetSetting(first) error = %v", err)
+	}
+	if err := store.SetSetting(ctx, "session_token", "second"); err != nil {
+		t.Fatalf("SetSetting(second) error = %v", err)
+	}
+	got, found, err := store.GetSetting(ctx, "session_token")
+	if err != nil {
+		t.Fatalf("GetSetting(updated) error = %v", err)
+	}
+	if !found || got != "second" {
+		t.Fatalf("GetSetting(updated) = (%q, %v), want (%q, true)", got, found, "second")
+	}
+
+	deleteErr := store.DeleteSetting(ctx, "session_token")
+	if deleteErr != nil {
+		t.Fatalf("DeleteSetting() error = %v", deleteErr)
+	}
+	_, found, err = store.GetSetting(ctx, "session_token")
+	if err != nil {
+		t.Fatalf("GetSetting(after delete) error = %v", err)
+	}
+	if found {
+		t.Fatal("GetSetting(after delete) found = true, want false")
 	}
 }
 
@@ -636,4 +704,16 @@ func (s storeFunc) SaveBudgetSnapshot(context.Context, BudgetSnapshot) error {
 
 func (s storeFunc) LoadBudgetSnapshots(context.Context) ([]BudgetSnapshot, error) {
 	return nil, nil
+}
+
+func (s storeFunc) GetSetting(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (s storeFunc) SetSetting(context.Context, string, string) error {
+	return nil
+}
+
+func (s storeFunc) DeleteSetting(context.Context, string) error {
+	return nil
 }

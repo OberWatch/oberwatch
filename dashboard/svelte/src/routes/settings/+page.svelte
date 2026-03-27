@@ -28,11 +28,16 @@
   let loading = $state(true);
   let errorMessage = $state<string | null>(null);
   let pricingWarning = $state<string | null>(null);
+  let passwordError = $state<string | null>(null);
+  let passwordSuccess = $state<string | null>(null);
   let version = $state('unknown');
   let uptimeSeconds = $state(0);
   let storageBackend = $state('unknown');
   let providerRows = $state<ProviderRow[]>([]);
   let pricingRows = $state<PricingRow[]>([]);
+  let currentPassword = $state('');
+  let newPassword = $state('');
+  let confirmPassword = $state('');
 
   const pricingRenderers = $derived.by<Record<string, Snippet<[RowData]>>>(() => ({
     input_per_million: inputPriceCell,
@@ -93,9 +98,31 @@
       }));
     } catch (err) {
       pricingWarning =
-        err instanceof Error ? err.message : 'Pricing data unavailable without a valid admin token.';
+        err instanceof Error ? err.message : 'Pricing data unavailable.';
     } finally {
       loading = false;
+    }
+  }
+
+  async function changePassword(): Promise<void> {
+    passwordError = null;
+    passwordSuccess = null;
+
+    try {
+      await fetchJSON('/settings/password', {
+        method: 'PUT',
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+          confirm_password: confirmPassword
+        })
+      });
+      passwordSuccess = 'Password updated.';
+      currentPassword = '';
+      newPassword = '';
+      confirmPassword = '';
+    } catch (err) {
+      passwordError = err instanceof Error ? err.message : 'Failed to update password.';
     }
   }
 
@@ -176,6 +203,49 @@
           <DataTable columns={pricingColumns} rows={pricingRows} cellRenderers={pricingRenderers} />
         </div>
       {/if}
+    </section>
+
+    <section class="rounded-lg border border-border-default bg-surface p-4">
+      <h2 class="text-lg font-semibold text-text-primary">Change Password</h2>
+      <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <label class="space-y-1">
+          <span class="text-xs uppercase tracking-wide text-text-secondary">Current password</span>
+          <input
+            bind:value={currentPassword}
+            type="password"
+            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+          />
+        </label>
+        <label class="space-y-1">
+          <span class="text-xs uppercase tracking-wide text-text-secondary">New password</span>
+          <input
+            bind:value={newPassword}
+            type="password"
+            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+          />
+        </label>
+        <label class="space-y-1">
+          <span class="text-xs uppercase tracking-wide text-text-secondary">Confirm new password</span>
+          <input
+            bind:value={confirmPassword}
+            type="password"
+            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+          />
+        </label>
+      </div>
+      {#if passwordError}
+        <p class="mt-3 text-sm text-danger">{passwordError}</p>
+      {/if}
+      {#if passwordSuccess}
+        <p class="mt-3 text-sm text-success">{passwordSuccess}</p>
+      {/if}
+      <button
+        type="button"
+        class="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+        onclick={changePassword}
+      >
+        Update Password
+      </button>
     </section>
   {/if}
 </section>
