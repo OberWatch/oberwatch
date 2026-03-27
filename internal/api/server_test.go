@@ -44,7 +44,18 @@ func TestServer_EndpointStatusAndShape(t *testing.T) {
 			wantStatus: http.StatusOK,
 			assertResponse: func(t *testing.T, _ *http.Response, payload map[string]any) {
 				t.Helper()
-				mustHaveKeys(t, payload, "status", "version", "uptime_seconds", "providers")
+				mustHaveKeys(t, payload, "status", "version", "uptime_seconds", "providers", "storage_backend")
+			},
+		},
+		{
+			name:       "pricing endpoint",
+			method:     http.MethodGet,
+			path:       basePath + "/pricing",
+			auth:       true,
+			wantStatus: http.StatusOK,
+			assertResponse: func(t *testing.T, _ *http.Response, payload map[string]any) {
+				t.Helper()
+				mustHaveKeys(t, payload, "pricing")
 			},
 		},
 		{
@@ -288,6 +299,7 @@ func TestServer_AuthMiddleware(t *testing.T) {
 		{name: "wrong token rejected", authorization: "Bearer wrong", path: basePath + "/budgets", wantStatus: http.StatusUnauthorized},
 		{name: "correct token allowed", authorization: "Bearer " + testAdminToken, path: basePath + "/budgets", wantStatus: http.StatusOK},
 		{name: "health bypasses auth", authorization: "", path: basePath + "/health", wantStatus: http.StatusOK},
+		{name: "pricing bypasses auth", authorization: "", path: basePath + "/pricing", wantStatus: http.StatusOK},
 	}
 
 	for _, tt := range tests {

@@ -32,6 +32,8 @@ type Server struct {
 	providerHealth map[string]string
 	adminToken     string
 	version        string
+	storageBackend string
+	pricing        []config.PricingEntry
 	globalPeriod   config.BudgetPeriod
 	globalLimitUSD float64
 	broker         *broker
@@ -56,12 +58,14 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 	}
 
 	server := &Server{
-		budget:     budgetManager,
-		store:      store,
-		mux:        http.NewServeMux(),
-		startedAt:  time.Now().UTC(),
-		adminToken: strings.TrimSpace(cfg.Server.AdminToken),
-		version:    version,
+		budget:         budgetManager,
+		store:          store,
+		mux:            http.NewServeMux(),
+		startedAt:      time.Now().UTC(),
+		adminToken:     strings.TrimSpace(cfg.Server.AdminToken),
+		version:        version,
+		storageBackend: string(cfg.Trace.Storage),
+		pricing:        append([]config.PricingEntry(nil), cfg.Pricing...),
 		providerHealth: map[string]string{
 			"openai":    providerStatus(cfg.Upstream.OpenAI.BaseURL),
 			"anthropic": providerStatus(cfg.Upstream.Anthropic.BaseURL),
@@ -79,13 +83,17 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 
 // ServeHTTP routes requests through auth and endpoint handlers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != basePath+"/health" {
+	if !isPublicEndpoint(r.URL.Path) {
 		if !s.authorized(r) {
 			writeError(w, http.StatusUnauthorized, "auth_required", "Missing or invalid admin token", "", 0, 0)
 			return
 		}
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func isPublicEndpoint(path string) bool {
+	return path == basePath+"/health" || path == basePath+"/pricing"
 }
 
 // PublishCostUpdate broadcasts a cost_update SSE event.
@@ -156,6 +164,7 @@ func (s *Server) WrapDispatcher(next budget.Dispatcher) budget.Dispatcher {
 
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/health", s.handleHealth)
+	s.mux.HandleFunc(basePath+"/pricing", s.handlePricing)
 	s.mux.HandleFunc(basePath+"/budgets", s.handleBudgets)
 	s.mux.HandleFunc(basePath+"/budgets/", s.handleBudgetByAgent)
 	s.mux.HandleFunc(basePath+"/kill-all", s.handleKillAll)
@@ -172,10 +181,38 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "ok",
-		"version":        s.version,
-		"uptime_seconds": int(time.Since(s.startedAt).Seconds()),
-		"providers":      s.providerHealth,
+		"status":          "ok",
+		"version":         s.version,
+		"uptime_seconds":  int(time.Since(s.startedAt).Seconds()),
+		"storage_backend": s.storageBackend,
+		"providers":       s.providerHealth,
+	})
+}
+
+func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	rows := make([]map[string]any, 0, len(s.pricing))
+	for _, entry := range s.pricing {
+		rows = append(rows, map[string]any{
+			"model":              entry.Model,
+			"provider":           entry.Provider,
+			"input_per_million":  entry.InputPerMillion,
+			"output_per_million": entry.OutputPerMillion,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		modelI := fmt.Sprintf("%v", rows[i]["model"])
+		modelJ := fmt.Sprintf("%v", rows[j]["model"])
+		return modelI < modelJ
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pricing": rows,
 	})
 }
 
@@ -352,6 +389,7 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		breakdown = append(breakdown, map[string]any{
 			"agent":         row.Agent,
 			"model":         row.Model,
+			"bucket":        row.Bucket,
 			"requests":      row.Requests,
 			"input_tokens":  row.InputTokens,
 			"output_tokens": row.OutputTokens,

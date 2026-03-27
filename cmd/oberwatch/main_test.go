@@ -168,6 +168,7 @@ func TestServeAndGate_BannerReflectsFlags(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("OW_TEST_MODE", "1")
 			cfgPath := writeValidConfig(t)
 
 			root := newRootCmd()

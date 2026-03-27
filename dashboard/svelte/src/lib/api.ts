@@ -57,3 +57,25 @@ export async function fetchJSON<T>(path: string, options: RequestInit = {}): Pro
 
   return JSON.parse(body) as T;
 }
+
+export async function fetchBlob(path: string, options: RequestInit = {}): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      ...(options.headers ?? {})
+    },
+    ...options
+  });
+
+  if (!response.ok) {
+    let details: APIErrorResponse | undefined;
+    try {
+      details = (await response.json()) as APIErrorResponse;
+    } catch {
+      details = undefined;
+    }
+    throw new ApiError(response, details);
+  }
+
+  return response.blob();
+}

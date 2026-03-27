@@ -8,6 +8,7 @@ export interface HealthResponse {
   status: string;
   version: string;
   uptime_seconds: number;
+  storage_backend?: string;
   providers: ProviderStatus;
 }
 
@@ -38,6 +39,7 @@ export interface BudgetsResponse {
 export interface CostBreakdown {
   agent: string;
   model: string;
+  bucket?: string;
   requests: number;
   input_tokens: number;
   output_tokens: number;
@@ -50,6 +52,17 @@ export interface CostsResponse {
   total_input_tokens: number;
   total_output_tokens: number;
   breakdown: CostBreakdown[];
+}
+
+export interface ModelPricing {
+  model: string;
+  provider: string;
+  input_per_million: number;
+  output_per_million: number;
+}
+
+export interface PricingResponse {
+  pricing: ModelPricing[];
 }
 
 export interface Agent {

@@ -40,3 +40,12 @@ dashboard/svelte/.svelte-kit/
 # Temporary files
 tmp/
 .tools/
+
+oberwatch
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.fuse_hidden*

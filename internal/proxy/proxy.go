@@ -50,6 +50,7 @@ type Hooks struct {
 	Pricing    *pricing.PricingTable
 	CostSink   storage.CostRecordSink
 	Management http.Handler
+	Dashboard  http.Handler
 	Logger     *slog.Logger
 }
 
@@ -114,6 +115,10 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 		}
 		if r.URL.Path == healthPath {
 			writeHealthResponse(w)
+			return
+		}
+		if hooks.Dashboard != nil && shouldServeDashboard(r.Method, r.URL.Path) {
+			hooks.Dashboard.ServeHTTP(w, r)
 			return
 		}
 
@@ -185,6 +190,23 @@ func detectProvider(path string, defaultProvider config.ProviderConfigName) conf
 		return config.ProviderAnthropic
 	default:
 		return defaultProvider
+	}
+}
+
+func shouldServeDashboard(method string, requestPath string) bool {
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	return !isKnownProxyPath(requestPath)
+}
+
+func isKnownProxyPath(requestPath string) bool {
+	normalized := strings.TrimSuffix(strings.TrimSpace(requestPath), "/")
+	switch normalized {
+	case "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/models", "/v1/messages":
+		return true
+	default:
+		return false
 	}
 }
 

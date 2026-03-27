@@ -3,18 +3,30 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/OberWatch/oberwatch/internal/alert"
+	"github.com/OberWatch/oberwatch/internal/api"
+	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/dashboard"
+	"github.com/OberWatch/oberwatch/internal/pricing"
+	"github.com/OberWatch/oberwatch/internal/proxy"
+	"github.com/OberWatch/oberwatch/internal/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -127,7 +139,7 @@ func newServeCmd(rootOpts *rootOptions) *cobra.Command {
 				port = opts.port
 			}
 			if cmd.Flags().Changed("admin-token") {
-				_ = opts.adminToken
+				cfg.Server.AdminToken = opts.adminToken
 			}
 
 			dashboardEnabled := cfg.Server.Dashboard
@@ -143,18 +155,26 @@ func newServeCmd(rootOpts *rootOptions) *cobra.Command {
 				traceEnabled = false
 			}
 
-			_, stopSignals := setupSignalHandling(cmd.Context(), cmd.ErrOrStderr())
+			signalCtx, stopSignals := setupSignalHandling(cmd.Context(), cmd.ErrOrStderr())
 			defer stopSignals()
 
-			_, err = fmt.Fprint(cmd.OutOrStdout(), renderStartupBanner(startupBannerOptions{
+			logger := newLogger(cfg.Server.LogLevel, cfg.Server.LogFormat, cmd.ErrOrStderr())
+
+			if _, err = fmt.Fprint(cmd.OutOrStdout(), renderStartupBanner(startupBannerOptions{
 				host:             host,
 				configPath:       rootOpts.configPath,
 				port:             port,
 				dashboardEnabled: dashboardEnabled,
 				gateEnabled:      gateEnabled,
 				traceEnabled:     traceEnabled,
-			}))
-			return err
+			})); err != nil {
+				return err
+			}
+			if isTestMode() {
+				return nil
+			}
+
+			return runServeRuntime(signalCtx, cfg, logger, host, port, dashboardEnabled, gateEnabled)
 		},
 	}
 
@@ -594,6 +614,123 @@ func setupSignalHandling(parent context.Context, stderr io.Writer) (context.Cont
 	}
 
 	return ctx, cleanup
+}
+
+type alertDispatchFunc func(context.Context, alert.Alert)
+
+func (f alertDispatchFunc) Dispatch(ctx context.Context, entry alert.Alert) {
+	f(ctx, entry)
+}
+
+func isTestMode() bool {
+	return os.Getenv("OW_TEST_MODE") == "1"
+}
+
+func newLogger(level config.LogLevel, format config.LogFormat, output io.Writer) *slog.Logger {
+	var slogLevel slog.Level
+	switch level {
+	case config.LogLevelDebug:
+		slogLevel = slog.LevelDebug
+	case config.LogLevelWarn:
+		slogLevel = slog.LevelWarn
+	case config.LogLevelError:
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+
+	handlerOptions := &slog.HandlerOptions{Level: slogLevel}
+	if format == config.LogFormatJSON {
+		return slog.New(slog.NewJSONHandler(output, handlerOptions))
+	}
+	return slog.New(slog.NewTextHandler(output, handlerOptions))
+}
+
+func runServeRuntime(
+	ctx context.Context,
+	cfg config.Config,
+	logger *slog.Logger,
+	host string,
+	port int,
+	dashboardEnabled bool,
+	gateEnabled bool,
+) error {
+	retention, err := parsePositiveDuration(cfg.Trace.Retention, "trace.retention")
+	if err != nil {
+		return err
+	}
+
+	store, err := storage.NewSQLiteStore(cfg.Trace.SQLitePath, retention, logger)
+	if err != nil {
+		return fmt.Errorf("initialize sqlite storage: %w", err)
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	bufferSize := cfg.Trace.MemoryBufferSize
+	if bufferSize <= 0 {
+		bufferSize = 1000
+	}
+	costWriter := storage.NewBufferedCostWriter(store, bufferSize, logger)
+	defer costWriter.Close()
+
+	baseDispatcher := alert.NewDispatcher(cfg.Alerts, 5*time.Second, logger)
+	var managementServer *api.Server
+	dispatcher := alertDispatchFunc(func(dispatchCtx context.Context, entry alert.Alert) {
+		if managementServer != nil {
+			managementServer.PublishAlert(entry)
+		}
+		baseDispatcher.Dispatch(dispatchCtx, entry)
+	})
+
+	budgetManager := budget.NewManagerWithClockAndDispatcher(cfg.Gate, logger, nil, dispatcher)
+	managementServer = api.New(cfg, budgetManager, store, version)
+
+	hooks := proxy.Hooks{
+		Management: managementServer,
+		Logger:     logger,
+	}
+	if gateEnabled {
+		hooks.Budget = budgetManager
+		hooks.Pricing = pricing.NewPricingTableFromConfig(cfg.Pricing, logger)
+		hooks.CostSink = managementServer.WrapCostSink(costWriter)
+	}
+
+	if dashboardEnabled {
+		dashboardHandler, handlerErr := dashboard.NewHandler()
+		if handlerErr != nil {
+			return fmt.Errorf("load embedded dashboard: %w", handlerErr)
+		}
+		hooks.Dashboard = dashboardHandler
+	}
+
+	proxyServer, err := proxy.New(cfg, hooks)
+	if err != nil {
+		return fmt.Errorf("initialize proxy server: %w", err)
+	}
+
+	httpServer := &http.Server{
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
+		Handler:           proxyServer,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve proxy: %w", err)
+	}
+
+	<-shutdownDone
+	return nil
 }
 
 type startupBannerOptions struct {
