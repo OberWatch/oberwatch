@@ -1,6 +1,9 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/state';
+  import type { Snippet } from 'svelte';
+
+  let { children }: { children: Snippet } = $props();
 
   type NavItem = {
     href: string;
@@ -61,6 +64,6 @@
   </aside>
 
   <main class="ml-56 h-screen overflow-y-auto p-6">
-    <slot />
+    {@render children()}
   </main>
 </div>
