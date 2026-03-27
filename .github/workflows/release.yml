@@ -57,9 +57,12 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.full }}
           tags: |
             ghcr.io/oberwatch/oberwatch:${{ steps.version.outputs.full }}
             ghcr.io/oberwatch/oberwatch:${{ steps.version.outputs.minor }}
             ghcr.io/oberwatch/oberwatch:latest
-            oberwatch/oberwatch:${{ steps.version.outputs.full }}
-            oberwatch/oberwatch:latest
+            ${{ secrets.DOCKERHUB_NAMESPACE }}/oberwatch:${{ steps.version.outputs.full }}
+            ${{ secrets.DOCKERHUB_NAMESPACE }}/oberwatch:${{ steps.version.outputs.minor }}
+            ${{ secrets.DOCKERHUB_NAMESPACE }}/oberwatch:latest

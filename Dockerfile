@@ -1,8 +1,9 @@
 # Build stage
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache git make nodejs npm
+RUN apk add --no-cache gcc musl-dev git make nodejs npm
 
 WORKDIR /app
+ARG VERSION=dev
 COPY go.mod go.sum ./
 RUN go mod download
 
