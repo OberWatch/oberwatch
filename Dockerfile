@@ -1,8 +1,10 @@
 # Build stage
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache git make nodejs npm
+RUN apk add --no-cache gcc musl-dev git make nodejs npm
 
 WORKDIR /app
+ARG CHANNEL=dev
+ARG COMMIT=dev
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -12,7 +14,7 @@ RUN cd dashboard/svelte && npm ci && npm run build
 
 # Build Go binary
 COPY . .
-RUN CGO_ENABLED=1 go build -ldflags="-s -w -X main.version=${VERSION}" -o oberwatch ./cmd/oberwatch
+RUN CGO_ENABLED=1 go build -ldflags="-s -w -X main.channel=${CHANNEL} -X main.commit=${COMMIT}" -o oberwatch ./cmd/oberwatch
 
 # Runtime stage
 FROM alpine:3.20
@@ -23,4 +25,4 @@ EXPOSE 8080
 VOLUME ["/data"]
 
 ENTRYPOINT ["oberwatch"]
-CMD ["serve", "--config", "/etc/oberwatch/oberwatch.toml"]
+CMD ["serve"]

@@ -9,6 +9,7 @@ export interface HealthResponse {
   version: string;
   uptime_seconds: number;
   storage_backend?: string;
+  emergency_stop?: boolean;
   providers: ProviderStatus;
 }
 
@@ -26,7 +27,19 @@ export interface Budget {
   percentage_used: number;
   status: string;
   action_on_exceed: string;
+  downgrade_chain?: string[];
+  downgrade_threshold_pct?: number;
+  alert_thresholds_pct?: number[];
   period_resets_at: string;
+}
+
+export interface BudgetUpdateRequest {
+  limit_usd: number;
+  period: string;
+  action_on_exceed: string;
+  downgrade_chain: string[];
+  downgrade_threshold_pct: number;
+  alert_thresholds_pct: number[];
 }
 
 export interface GlobalBudget {
@@ -144,4 +157,8 @@ export interface BudgetAlertEvent {
 export interface AgentKilledEvent {
   agent: string;
   reason: string;
+}
+
+export interface EmergencyStopEvent {
+  enabled: boolean;
 }

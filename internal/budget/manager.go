@@ -13,6 +13,7 @@ import (
 
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
 const unknownAgent = "unknown"
@@ -69,9 +70,11 @@ type agentState struct {
 	lastAlertedPct  float64
 	periodStartedAt time.Time
 	periodResetsAt  time.Time
+	lastSeenAt      time.Time
 	requestTimes    []time.Time
 	triggeredAlerts map[float64]bool
 	killed          bool
+	dirty           bool
 }
 
 // Snapshot captures current tracked state for tests and diagnostics.
@@ -123,28 +126,129 @@ type BudgetManager struct {
 	clock        Clock
 	logger       *slog.Logger
 	dispatcher   Dispatcher
+	store        storage.Store
 	defaultState agentPolicy
 
-	mu          sync.RWMutex
-	agentPolicy map[string]agentPolicy
-	state       map[string]*agentState
-	apiKeyMap   []config.APIKeyMapEntry
-	runaway     config.RunawayConfig
-	emergency   bool
+	mu            sync.RWMutex
+	agentPolicy   map[string]agentPolicy
+	state         map[string]*agentState
+	apiKeyMap     []config.APIKeyMapEntry
+	runaway       config.RunawayConfig
+	emergency     bool
+	knownAgents   map[string]struct{}
+	flushInterval time.Duration
+	flushStop     chan struct{}
+	flushWG       sync.WaitGroup
 }
 
 // NewManager creates a budget manager from gate configuration.
 func NewManager(gate config.GateConfig, logger *slog.Logger) *BudgetManager {
-	return NewManagerWithClockAndDispatcher(gate, logger, realClock{}, nil)
+	manager, _ := newManager(gate, logger, nil, realClock{}, nil, false)
+	return manager
 }
 
 // NewManagerWithClock creates a budget manager with an explicit clock.
 func NewManagerWithClock(gate config.GateConfig, logger *slog.Logger, clock Clock) *BudgetManager {
-	return NewManagerWithClockAndDispatcher(gate, logger, clock, nil)
+	manager, _ := newManager(gate, logger, nil, clock, nil, false)
+	return manager
 }
 
 // NewManagerWithClockAndDispatcher creates a budget manager with explicit clock and alert dispatcher.
 func NewManagerWithClockAndDispatcher(gate config.GateConfig, logger *slog.Logger, clock Clock, dispatcher Dispatcher) *BudgetManager {
+	manager, _ := newManager(gate, logger, nil, clock, dispatcher, false)
+	return manager
+}
+
+// NewPersistentManager creates a budget manager backed by SQLite agents.
+func NewPersistentManager(gate config.GateConfig, logger *slog.Logger, store storage.Store) (*BudgetManager, error) {
+	return newManager(gate, logger, store, realClock{}, nil, true)
+}
+
+// NewPersistentManagerWithClockAndDispatcher creates a persistent budget manager with explicit clock and dispatcher.
+func NewPersistentManagerWithClockAndDispatcher(
+	gate config.GateConfig,
+	logger *slog.Logger,
+	store storage.Store,
+	clock Clock,
+	dispatcher Dispatcher,
+) (*BudgetManager, error) {
+	return newManager(gate, logger, store, clock, dispatcher, true)
+}
+
+// SeedConfiguredAgents writes TOML-configured agents into the persistent store.
+func SeedConfiguredAgents(ctx context.Context, gate config.GateConfig, store storage.Store, clock Clock) error {
+	if store == nil {
+		return nil
+	}
+	if clock == nil {
+		clock = realClock{}
+	}
+
+	defaultPolicy := agentPolicy{
+		period:                gate.DefaultBudget.Period,
+		actionOnExceed:        gate.DefaultBudget.ActionOnExceed,
+		limitUSD:              gate.DefaultBudget.LimitUSD,
+		downgradeThresholdPct: gate.DowngradeThresholdPct,
+		downgradeChain:        append([]string(nil), gate.DefaultDowngradeChain...),
+		alertThresholdsPct:    append([]float64(nil), gate.AlertThresholdsPct...),
+	}
+
+	for _, entry := range gate.Agents {
+		normalized := normalizeAgent(entry.Name)
+		policy := clonePolicy(defaultPolicy)
+		policy.period = entry.Period
+		policy.actionOnExceed = entry.ActionOnExceed
+		policy.limitUSD = entry.LimitUSD
+		if len(entry.DowngradeChain) > 0 {
+			policy.downgradeChain = append([]string(nil), entry.DowngradeChain...)
+		}
+
+		record, found, err := store.GetAgent(ctx, normalized)
+		if err != nil {
+			return fmt.Errorf("load persisted agent %q: %w", normalized, err)
+		}
+		if !found {
+			now := clock.Now().UTC()
+			record = storage.AgentRecord{
+				Name:            normalized,
+				Status:          "active",
+				PeriodStartedAt: now,
+				PeriodResetsAt:  nextPeriodReset(now, policy.period),
+				FirstSeenAt:     now,
+				LastSeenAt:      now,
+			}
+		}
+
+		record.Name = normalized
+		record.BudgetLimitUSD = policy.limitUSD
+		record.BudgetPeriod = policy.period
+		record.ActionOnExceed = policy.actionOnExceed
+		record.DowngradeChain = append([]string(nil), policy.downgradeChain...)
+		record.DowngradeThresholdPct = policy.downgradeThresholdPct
+		record.AlertThresholdsPct = append([]float64(nil), policy.alertThresholdsPct...)
+		if record.PeriodStartedAt.IsZero() {
+			record.PeriodStartedAt = clock.Now().UTC()
+		}
+		if record.PeriodResetsAt.IsZero() {
+			record.PeriodResetsAt = nextPeriodReset(record.PeriodStartedAt, policy.period)
+		}
+
+		if err := store.UpsertAgent(ctx, record); err != nil {
+			return fmt.Errorf("seed configured agent %q: %w", normalized, err)
+		}
+	}
+
+	return nil
+}
+
+func newManager(
+	gate config.GateConfig,
+	logger *slog.Logger,
+	store storage.Store,
+	clock Clock,
+	dispatcher Dispatcher,
+	persistent bool,
+) (*BudgetManager, error) {
 	if clock == nil {
 		clock = realClock{}
 	}
@@ -153,9 +257,11 @@ func NewManagerWithClockAndDispatcher(gate config.GateConfig, logger *slog.Logge
 		clock:       clock,
 		logger:      logger,
 		dispatcher:  dispatcher,
+		store:       store,
 		agentPolicy: make(map[string]agentPolicy),
 		state:       make(map[string]*agentState),
 		apiKeyMap:   append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
+		knownAgents: make(map[string]struct{}),
 		runaway:     gate.Runaway,
 		defaultState: agentPolicy{
 			period:                gate.DefaultBudget.Period,
@@ -175,10 +281,20 @@ func NewManagerWithClockAndDispatcher(gate config.GateConfig, logger *slog.Logge
 		if len(entry.DowngradeChain) > 0 {
 			policy.downgradeChain = append([]string(nil), entry.DowngradeChain...)
 		}
-		manager.agentPolicy[strings.ToLower(strings.TrimSpace(entry.Name))] = policy
+		normalized := normalizeAgent(entry.Name)
+		manager.agentPolicy[normalized] = policy
+		manager.knownAgents[normalized] = struct{}{}
 	}
 
-	return manager
+	if persistent && store != nil {
+		if err := manager.loadPersistedAgents(context.Background()); err != nil {
+			return nil, err
+		}
+		manager.flushInterval = 30 * time.Second
+		manager.startFlushLoop()
+	}
+
+	return manager, nil
 }
 
 // IdentifyAgent returns the calling agent by header, API key mapping, then "unknown".
@@ -221,27 +337,21 @@ func (m *BudgetManager) CheckBudgetDetailed(agent string, estimatedCostUSD float
 	normalizedAgent := normalizeAgent(agent)
 	now := m.clock.Now().UTC()
 	queuedAlerts := make([]alert.Alert, 0, 2)
+	flushAgent := ""
 
 	m.mu.Lock()
 	defer func() {
 		m.mu.Unlock()
 		m.dispatchAlerts(queuedAlerts)
+		m.flushAgentIfNeeded(flushAgent)
 	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, created := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state.lastSeenAt = now
 	m.maybeResetPeriodLocked(state, policy, now)
-
-	if m.emergency {
-		return Decision{
-			Action:   ActionKill,
-			Code:     "emergency_stop",
-			Message:  "Emergency stop is active",
-			Agent:    normalizedAgent,
-			Period:   policy.period,
-			LimitUSD: policy.limitUSD,
-			SpentUSD: state.spentUSD,
-		}
+	if created {
+		flushAgent = normalizedAgent
 	}
 
 	if state.killed {
@@ -258,6 +368,7 @@ func (m *BudgetManager) CheckBudgetDetailed(agent string, estimatedCostUSD float
 
 	if m.registerRequestAndDetectRunawayLocked(state, now) {
 		state.killed = true
+		state.dirty = true
 		queuedAlerts = append(
 			queuedAlerts,
 			alert.NewRunawayDetectedAlert(normalizedAgent, len(state.requestTimes), m.runaway.WindowSeconds),
@@ -325,6 +436,7 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 	normalizedAgent := normalizeAgent(agent)
 	now := m.clock.Now().UTC()
 	queuedAlerts := make([]alert.Alert, 0, 2)
+	flushAgent := ""
 
 	if costUSD < 0 {
 		costUSD = 0
@@ -334,15 +446,21 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 	defer func() {
 		m.mu.Unlock()
 		m.dispatchAlerts(queuedAlerts)
+		m.flushAgentIfNeeded(flushAgent)
 	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, created := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state.lastSeenAt = now
 	m.maybeResetPeriodLocked(state, policy, now)
 
 	before := percentageUsed(policy.limitUSD, state.spentUSD)
 	state.spentUSD += costUSD
+	state.dirty = true
 	after := percentageUsed(policy.limitUSD, state.spentUSD)
+	if created {
+		flushAgent = normalizedAgent
+	}
 
 	for _, threshold := range policy.alertThresholdsPct {
 		if threshold <= before || threshold > after {
@@ -386,7 +504,7 @@ func (m *BudgetManager) Snapshot(agent string) Snapshot {
 	defer m.mu.Unlock()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	m.maybeResetPeriodLocked(state, policy, now)
 
 	return Snapshot{
@@ -408,11 +526,14 @@ func (m *BudgetManager) KillAgent(agent string) {
 	defer func() {
 		m.mu.Unlock()
 		m.dispatchAlerts(queuedAlerts)
+		m.flushAgentIfNeeded(normalizedAgent)
 	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	state.killed = true
+	state.lastSeenAt = now
+	state.dirty = true
 	queuedAlerts = append(queuedAlerts, alert.NewAgentKilledAlert(normalizedAgent, "manual_kill"))
 }
 
@@ -422,11 +543,16 @@ func (m *BudgetManager) EnableAgent(agent string) {
 	now := m.clock.Now().UTC()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.flushAgentIfNeeded(normalizedAgent)
+	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	state.killed = false
+	state.lastSeenAt = now
+	state.dirty = true
 }
 
 // SetEmergencyStop enables or disables the global kill switch.
@@ -515,6 +641,7 @@ func (m *BudgetManager) overLimitDecision(agent string, policy agentPolicy, stat
 		decision.Action = ActionAlert
 	case config.BudgetActionKill:
 		state.killed = true
+		state.dirty = true
 		decision.Action = ActionKill
 		decision.Code = "agent_killed"
 		decision.Message = fmt.Sprintf("Agent '%s' is disabled after budget exceed", agent)
@@ -550,18 +677,21 @@ func (m *BudgetManager) policyForAgentLocked(agent string) agentPolicy {
 	return m.defaultState
 }
 
-func (m *BudgetManager) stateForAgentLocked(agent string, policy agentPolicy, now time.Time) *agentState {
+func (m *BudgetManager) stateForAgentLocked(agent string, policy agentPolicy, now time.Time) (*agentState, bool) {
 	state, ok := m.state[agent]
 	if ok {
-		return state
+		return state, false
 	}
 	state = &agentState{
 		periodStartedAt: now,
 		periodResetsAt:  nextPeriodReset(now, policy.period),
+		lastSeenAt:      now,
 		triggeredAlerts: make(map[float64]bool),
+		dirty:           true,
 	}
 	m.state[agent] = state
-	return state
+	m.knownAgents[agent] = struct{}{}
+	return state, true
 }
 
 func (m *BudgetManager) maybeResetPeriodLocked(state *agentState, policy agentPolicy, now time.Time) {
@@ -574,6 +704,7 @@ func (m *BudgetManager) maybeResetPeriodLocked(state *agentState, policy agentPo
 	state.periodResetsAt = nextPeriodReset(now, policy.period)
 	state.triggeredAlerts = make(map[float64]bool)
 	state.lastAlertedPct = 0
+	state.dirty = true
 }
 
 func nextPeriodReset(start time.Time, period config.BudgetPeriod) time.Time {
@@ -676,6 +807,239 @@ func (m *BudgetManager) dispatchAlerts(events []alert.Alert) {
 	}
 }
 
+func (m *BudgetManager) loadPersistedAgents(ctx context.Context) error {
+	if m.store == nil {
+		return nil
+	}
+
+	records, err := m.store.ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("load persisted agents: %w", err)
+	}
+
+	now := m.clock.Now().UTC()
+	for _, record := range records {
+		agent := normalizeAgent(record.Name)
+		m.agentPolicy[agent] = agentPolicy{
+			limitUSD:              record.BudgetLimitUSD,
+			downgradeThresholdPct: record.DowngradeThresholdPct,
+			period:                record.BudgetPeriod,
+			actionOnExceed:        record.ActionOnExceed,
+			downgradeChain:        append([]string(nil), record.DowngradeChain...),
+			alertThresholdsPct:    append([]float64(nil), record.AlertThresholdsPct...),
+		}
+		m.state[agent] = &agentState{
+			spentUSD:        record.BudgetSpentUSD,
+			periodStartedAt: firstNonZeroTime(record.PeriodStartedAt, now),
+			periodResetsAt:  firstNonZeroTime(record.PeriodResetsAt, nextPeriodReset(firstNonZeroTime(record.PeriodStartedAt, now), record.BudgetPeriod)),
+			lastSeenAt:      firstNonZeroTime(record.LastSeenAt, now),
+			triggeredAlerts: triggeredAlerts(record.AlertThresholdsPct, record.BudgetLimitUSD, record.BudgetSpentUSD),
+			killed:          strings.EqualFold(record.Status, "killed"),
+			dirty:           false,
+		}
+		m.knownAgents[agent] = struct{}{}
+	}
+
+	return nil
+}
+
+func (m *BudgetManager) startFlushLoop() {
+	if m.store == nil || m.flushInterval <= 0 {
+		return
+	}
+	m.flushStop = make(chan struct{})
+	m.flushWG.Add(1)
+	go func() {
+		defer m.flushWG.Done()
+		ticker := time.NewTicker(m.flushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := m.Flush(context.Background()); err != nil && m.logger != nil {
+					m.logger.Warn("flush agent budgets failed", "error", err)
+				}
+			case <-m.flushStop:
+				return
+			}
+		}
+	}()
+}
+
+// Close stops background persistence and flushes pending spend state.
+func (m *BudgetManager) Close() error {
+	if m.flushStop != nil {
+		close(m.flushStop)
+		m.flushWG.Wait()
+	}
+	return m.Flush(context.Background())
+}
+
+// Flush persists dirty agent spend/config state to the backing store.
+func (m *BudgetManager) Flush(ctx context.Context) error {
+	if m.store == nil {
+		return nil
+	}
+
+	records := m.snapshotDirtyAgentRecords()
+	for _, record := range records {
+		if err := m.store.UpsertAgent(ctx, record); err != nil {
+			return fmt.Errorf("flush agent %q: %w", record.Name, err)
+		}
+	}
+	return nil
+}
+
+// RenameAgent changes the runtime and persisted name for one tracked agent.
+func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName string) error {
+	oldName = normalizeAgent(oldName)
+	newName = normalizeAgent(newName)
+	if oldName == newName {
+		return nil
+	}
+
+	m.mu.Lock()
+	if _, exists := m.knownAgents[newName]; exists {
+		m.mu.Unlock()
+		return storage.ErrAgentExists
+	}
+
+	policy := m.policyForAgentLocked(oldName)
+	state, _ := m.stateForAgentLocked(oldName, policy, m.clock.Now().UTC())
+	delete(m.agentPolicy, oldName)
+	delete(m.state, oldName)
+	delete(m.knownAgents, oldName)
+	m.agentPolicy[newName] = clonePolicy(policy)
+	m.state[newName] = cloneState(state)
+	m.knownAgents[newName] = struct{}{}
+	m.state[newName].dirty = true
+	m.mu.Unlock()
+
+	if m.store != nil {
+		if err := m.store.RenameAgent(ctx, oldName, newName); err != nil {
+			m.mu.Lock()
+			delete(m.agentPolicy, newName)
+			delete(m.state, newName)
+			delete(m.knownAgents, newName)
+			m.agentPolicy[oldName] = policy
+			m.state[oldName] = state
+			m.knownAgents[oldName] = struct{}{}
+			m.mu.Unlock()
+			return err
+		}
+	}
+
+	return m.Flush(ctx)
+}
+
+func (m *BudgetManager) flushAgentIfNeeded(agent string) {
+	if m.store == nil || strings.TrimSpace(agent) == "" {
+		return
+	}
+	if err := m.Flush(context.Background()); err != nil && m.logger != nil {
+		m.logger.Warn("flush agent state failed", "agent", agent, "error", err)
+	}
+}
+
+func (m *BudgetManager) snapshotDirtyAgentRecords() []storage.AgentRecord {
+	now := m.clock.Now().UTC()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	records := make([]storage.AgentRecord, 0, len(m.state))
+	for agent := range m.knownAgents {
+		policy := m.policyForAgentLocked(agent)
+		state, _ := m.stateForAgentLocked(agent, policy, now)
+		m.maybeResetPeriodLocked(state, policy, now)
+		if !state.dirty {
+			continue
+		}
+		records = append(records, m.agentRecordLocked(agent, policy, state, now))
+		state.dirty = false
+	}
+	return records
+}
+
+func (m *BudgetManager) agentRecordLocked(agent string, policy agentPolicy, state *agentState, now time.Time) storage.AgentRecord {
+	status := "active"
+	if state.killed {
+		status = "killed"
+	}
+	firstSeenAt := state.periodStartedAt
+	if firstSeenAt.IsZero() {
+		firstSeenAt = now
+	}
+	lastSeenAt := state.lastSeenAt
+	if lastSeenAt.IsZero() {
+		lastSeenAt = now
+	}
+	return storage.AgentRecord{
+		Name:                  agent,
+		Status:                status,
+		BudgetLimitUSD:        policy.limitUSD,
+		BudgetSpentUSD:        state.spentUSD,
+		BudgetPeriod:          policy.period,
+		ActionOnExceed:        policy.actionOnExceed,
+		DowngradeChain:        append([]string(nil), policy.downgradeChain...),
+		DowngradeThresholdPct: policy.downgradeThresholdPct,
+		AlertThresholdsPct:    append([]float64(nil), policy.alertThresholdsPct...),
+		PeriodStartedAt:       state.periodStartedAt,
+		PeriodResetsAt:        state.periodResetsAt,
+		FirstSeenAt:           firstSeenAt,
+		LastSeenAt:            lastSeenAt,
+	}
+}
+
+func clonePolicy(policy agentPolicy) agentPolicy {
+	return agentPolicy{
+		limitUSD:              policy.limitUSD,
+		downgradeThresholdPct: policy.downgradeThresholdPct,
+		period:                policy.period,
+		actionOnExceed:        policy.actionOnExceed,
+		downgradeChain:        append([]string(nil), policy.downgradeChain...),
+		alertThresholdsPct:    append([]float64(nil), policy.alertThresholdsPct...),
+	}
+}
+
+func cloneState(state *agentState) *agentState {
+	if state == nil {
+		return &agentState{triggeredAlerts: make(map[float64]bool)}
+	}
+	triggered := make(map[float64]bool, len(state.triggeredAlerts))
+	for threshold, fired := range state.triggeredAlerts {
+		triggered[threshold] = fired
+	}
+	return &agentState{
+		spentUSD:        state.spentUSD,
+		lastAlertedPct:  state.lastAlertedPct,
+		periodStartedAt: state.periodStartedAt,
+		periodResetsAt:  state.periodResetsAt,
+		lastSeenAt:      state.lastSeenAt,
+		requestTimes:    append([]time.Time(nil), state.requestTimes...),
+		triggeredAlerts: triggered,
+		killed:          state.killed,
+		dirty:           state.dirty,
+	}
+}
+
+func firstNonZeroTime(value time.Time, fallback time.Time) time.Time {
+	if !value.IsZero() {
+		return value.UTC()
+	}
+	return fallback.UTC()
+}
+
+func triggeredAlerts(thresholds []float64, limitUSD float64, spentUSD float64) map[float64]bool {
+	fired := make(map[float64]bool)
+	for _, threshold := range thresholds {
+		if percentageUsed(limitUSD, spentUSD) >= threshold {
+			fired[threshold] = true
+		}
+	}
+	return fired
+}
+
 // ListBudgets returns all known per-agent budget states.
 func (m *BudgetManager) ListBudgets() []BudgetView {
 	now := m.clock.Now().UTC()
@@ -683,7 +1047,10 @@ func (m *BudgetManager) ListBudgets() []BudgetView {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	keys := make(map[string]struct{}, len(m.agentPolicy)+len(m.state))
+	keys := make(map[string]struct{}, len(m.knownAgents)+len(m.agentPolicy)+len(m.state))
+	for key := range m.knownAgents {
+		keys[key] = struct{}{}
+	}
 	for key := range m.agentPolicy {
 		keys[key] = struct{}{}
 	}
@@ -694,7 +1061,7 @@ func (m *BudgetManager) ListBudgets() []BudgetView {
 	result := make([]BudgetView, 0, len(keys))
 	for agent := range keys {
 		policy := m.policyForAgentLocked(agent)
-		state := m.stateForAgentLocked(agent, policy, now)
+		state, _ := m.stateForAgentLocked(agent, policy, now)
 		m.maybeResetPeriodLocked(state, policy, now)
 		result = append(result, toBudgetView(agent, policy, state))
 	}
@@ -711,7 +1078,7 @@ func (m *BudgetManager) GetBudget(agent string) BudgetView {
 	defer m.mu.Unlock()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	m.maybeResetPeriodLocked(state, policy, now)
 	return toBudgetView(normalizedAgent, policy, state)
 }
@@ -729,7 +1096,10 @@ func (m *BudgetManager) UpdateBudget(agent string, update BudgetUpdate) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.flushAgentIfNeeded(normalizedAgent)
+	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
 	policy.limitUSD = update.LimitUSD
@@ -740,8 +1110,10 @@ func (m *BudgetManager) UpdateBudget(agent string, update BudgetUpdate) error {
 	policy.alertThresholdsPct = append([]float64(nil), update.AlertThresholdsPct...)
 	m.agentPolicy[normalizedAgent] = policy
 
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	m.maybeResetPeriodLocked(state, policy, now)
+	state.lastSeenAt = now
+	state.dirty = true
 	return nil
 }
 
@@ -751,16 +1123,21 @@ func (m *BudgetManager) ResetBudget(agent string) {
 	now := m.clock.Now().UTC()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.flushAgentIfNeeded(normalizedAgent)
+	}()
 
 	policy := m.policyForAgentLocked(normalizedAgent)
-	state := m.stateForAgentLocked(normalizedAgent, policy, now)
+	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	state.spentUSD = 0
 	state.lastAlertedPct = 0
 	state.periodStartedAt = now
 	state.periodResetsAt = nextPeriodReset(now, policy.period)
 	state.triggeredAlerts = make(map[float64]bool)
 	state.requestTimes = state.requestTimes[:0]
+	state.lastSeenAt = now
+	state.dirty = true
 }
 
 func toBudgetView(agent string, policy agentPolicy, state *agentState) BudgetView {

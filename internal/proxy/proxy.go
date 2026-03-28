@@ -232,6 +232,10 @@ func gateMiddleware(hooks Hooks) func(http.Handler) http.Handler {
 			if hooks.Gate != nil {
 				hooks.Gate(r)
 			}
+			if hooks.Budget != nil && hooks.Budget.EmergencyStop() && isKnownProxyPath(r.URL.Path) {
+				writeEmergencyStopError(w)
+				return
+			}
 			if hooks.Budget != nil && hooks.Pricing != nil {
 				agent := hooks.Budget.IdentifyAgent(r)
 
@@ -320,6 +324,25 @@ func writeHealthResponse(w http.ResponseWriter) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(payload); err != nil {
+		return
+	}
+}
+
+func writeEmergencyStopError(w http.ResponseWriter) {
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]string{
+			"code":    "emergency_stop",
+			"message": "Emergency stop is active. All agent requests are paused. Disable emergency stop in the dashboard to resume.",
+		},
+	})
+	if err != nil {
+		http.Error(w, "emergency stop is active", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
 	if _, err := w.Write(payload); err != nil {
 		return
 	}

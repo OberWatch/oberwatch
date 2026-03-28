@@ -29,6 +29,8 @@
   let activeAgents = $state(0);
   let alertsToday = $state(0);
   let uptimeSeconds = $state(0);
+  let emergencyStopActive = $state(false);
+  let emergencyBusy = $state(false);
   let labels = $state<string[]>([]);
   let values = $state<number[]>([]);
   let recentAlerts = $state<Alert[]>([]);
@@ -83,6 +85,7 @@
       activeAgents = agentsRes.agents.filter((agent: Agent) => agent.status === 'active').length;
       alertsToday = alertsRes.alerts.length;
       uptimeSeconds = health.uptime_seconds;
+      emergencyStopActive = health.emergency_stop ?? false;
       recentAlerts = alertsRes.alerts.slice(0, 5);
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : 'Failed to load overview data.';
@@ -92,7 +95,11 @@
   }
 
   async function emergencyStop(): Promise<void> {
-    if (!confirm('Emergency stop will disable all agents. Continue?')) {
+    if (
+      !confirm(
+        'This will pause ALL agent requests immediately. The dashboard and API will remain accessible. Are you sure?'
+      )
+    ) {
       return;
     }
 
@@ -104,11 +111,28 @@
     }
   }
 
+  async function resumeOperations(): Promise<void> {
+    emergencyBusy = true;
+    try {
+      await fetchJSON('/resume', { method: 'POST' });
+      await loadOverview();
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : 'Resume failed.';
+    } finally {
+      emergencyBusy = false;
+    }
+  }
+
   onMount(() => {
     void loadOverview();
 
     const stream = connectStream((eventName) => {
-      if (eventName === 'cost_update' || eventName === 'budget_alert' || eventName === 'agent_killed') {
+      if (
+        eventName === 'cost_update' ||
+        eventName === 'budget_alert' ||
+        eventName === 'agent_killed' ||
+        eventName === 'emergency_stop'
+      ) {
         void loadOverview();
       }
     });
@@ -124,6 +148,20 @@
     <h1 class="text-2xl font-semibold text-text-primary">Overview</h1>
     <p class="text-sm text-text-secondary">Live spend, alerts, and system health.</p>
   </header>
+
+  {#if emergencyStopActive}
+    <div class="flex items-center justify-between gap-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+      <p class="text-sm font-medium text-warning">Emergency Stop Active — All agent requests are paused.</p>
+      <button
+        type="button"
+        class="rounded-md bg-success px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+        disabled={emergencyBusy}
+        onclick={resumeOperations}
+      >
+        Resume Operations
+      </button>
+    </div>
+  {/if}
 
   {#if errorMessage}
     <div class="rounded-lg border border-danger/40 bg-danger/10 p-4">
@@ -181,11 +219,13 @@
     {/if}
   </section>
 
-  <button
-    type="button"
-    class="w-full rounded-md bg-danger px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-600"
-    onclick={emergencyStop}
-  >
-    Emergency Stop
-  </button>
+  {#if !emergencyStopActive}
+    <button
+      type="button"
+      class="w-full rounded-md bg-danger px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-600"
+      onclick={emergencyStop}
+    >
+      Emergency Stop
+    </button>
+  {/if}
 </section>

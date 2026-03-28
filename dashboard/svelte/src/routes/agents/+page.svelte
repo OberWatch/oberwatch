@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import { fetchJSON } from '$lib/api';
   import { formatUSD } from '$lib/currency';
-  import { BudgetBar, DataTable, StatusBadge } from '$lib/components';
-  import type { Budget, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
+  import { AgentEditPanel, BudgetBar, DataTable, StatusBadge } from '$lib/components';
+  import type { Budget, BudgetUpdateRequest, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
 
   type BadgeStatus = 'active' | 'near_limit' | 'killed' | 'success' | 'error' | 'warning';
@@ -38,10 +38,18 @@
 
   let loading = $state(true);
   let errorMessage = $state<string | null>(null);
+  let successMessage = $state<string | null>(null);
   let search = $state('');
   let rows = $state<AgentRow[]>([]);
+  let agents = $state<Agent[]>([]);
+  let budgetsByAgent = $state<Record<string, Budget>>({});
   let actionBusyByAgent = $state<Record<string, boolean>>({});
   let proxyURL = $state('');
+  let selectedAgent = $state<Agent | null>(null);
+  let selectedBudget = $state<Budget | null>(null);
+  let editOpen = $state(false);
+  let editBusy = $state(false);
+  let editError = $state<string | null>(null);
 
   const filteredRows = $derived.by(() => {
     const term = search.trim().toLowerCase();
@@ -95,12 +103,14 @@
         fetchJSON<BudgetsResponse>('/budgets')
       ]);
 
-      const budgetMap = new Map<string, Budget>(
+      agents = agentsRes.agents;
+      const budgetMap = Object.fromEntries(
         budgetsRes.budgets.map((budget: Budget) => [budget.agent, budget])
       );
+      budgetsByAgent = budgetMap;
 
       rows = agentsRes.agents.map((agent: Agent) => {
-        const budget = budgetMap.get(agent.name);
+        const budget = budgetMap[agent.name] as Budget | undefined;
         const spentUSD = budget?.spent_usd ?? agent.total_cost_usd;
         const limitUSD = budget?.limit_usd ?? 0;
         const usage = budget?.percentage_used ?? 0;
@@ -149,6 +159,49 @@
     }
   }
 
+  function openEditor(agentName: string): void {
+    const agent = agents.find((entry) => entry.name === agentName) ?? null;
+    const budget = budgetsByAgent[agentName] ?? null;
+    selectedAgent = agent;
+    selectedBudget = budget;
+    editError = null;
+    editOpen = true;
+  }
+
+  async function saveAgentEdit(payload: {
+    oldName: string;
+    newName: string;
+    budget: BudgetUpdateRequest;
+  }): Promise<void> {
+    editBusy = true;
+    editError = null;
+
+    try {
+      const nextName = payload.newName.trim();
+      if (nextName !== payload.oldName) {
+        await fetchJSON(`/agents/${encodeURIComponent(payload.oldName)}/rename`, {
+          method: 'PUT',
+          body: JSON.stringify({ new_name: nextName })
+        });
+      }
+
+      await fetchJSON(`/budgets/${encodeURIComponent(nextName)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload.budget)
+      });
+
+      successMessage = `Updated agent "${nextName}".`;
+      editOpen = false;
+      selectedAgent = null;
+      selectedBudget = null;
+      await loadAgents();
+    } catch (err) {
+      editError = err instanceof Error ? err.message : 'Failed to update agent.';
+    } finally {
+      editBusy = false;
+    }
+  }
+
   onMount(() => {
     proxyURL = window.location.origin;
     void loadAgents();
@@ -187,6 +240,13 @@
 {#snippet actionsCell(raw: RowData)}
   {@const row = raw as AgentRow}
   <div class="flex items-center gap-2">
+    <button
+      type="button"
+      class="rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary"
+      onclick={() => openEditor(row.name)}
+    >
+      Edit
+    </button>
     {#if row.isActive}
       <button
         type="button"
@@ -246,6 +306,12 @@
     </div>
   {/if}
 
+  {#if successMessage}
+    <div class="rounded-lg border border-success/40 bg-success/10 p-4">
+      <p class="text-sm text-success">{successMessage}</p>
+    </div>
+  {/if}
+
   {#if loading}
     <div class="overflow-hidden rounded-lg border border-border-default bg-surface">
       {#each Array.from({ length: 6 }) as _, index (index)}
@@ -267,3 +333,16 @@
     <DataTable {columns} rows={filteredRows} {onSort} {cellRenderers} />
   {/if}
 </section>
+
+<AgentEditPanel
+  open={editOpen}
+  agent={selectedAgent}
+  budget={selectedBudget}
+  busy={editBusy}
+  errorMessage={editError}
+  onClose={() => {
+    editOpen = false;
+    editError = null;
+  }}
+  onSave={saveAgentEdit}
+/>

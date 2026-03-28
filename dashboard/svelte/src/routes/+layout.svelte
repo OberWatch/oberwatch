@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { fetchJSON } from '$lib/api';
+  import { connectStream } from '$lib/sse';
   import type { AuthStatusResponse, HealthResponse } from '$lib/types';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
@@ -32,6 +33,8 @@
   let authStatus = $state<AuthStatusResponse | null>(null);
   let logoutError = $state<string | null>(null);
   let displayVersion = $state('v0.1.0');
+  let emergencyStop = $state(false);
+  let emergencyBusy = $state(false);
 
   function isActive(pathname: string, href: string): boolean {
     if (href === '/') {
@@ -52,6 +55,7 @@
     try {
       const health = await fetchJSON<HealthResponse>('/health');
       displayVersion = health.version;
+      emergencyStop = health.emergency_stop ?? false;
     } catch {
       // Keep the default sidebar version if health is temporarily unavailable.
     }
@@ -90,9 +94,31 @@
     }
   }
 
-  onMount(async () => {
-    await Promise.all([loadAuthStatus(), loadHealthVersion()]);
-    await syncRoute();
+  async function resumeOperations(): Promise<void> {
+    emergencyBusy = true;
+    try {
+      await fetchJSON('/resume', { method: 'POST' });
+      await loadHealthVersion();
+    } finally {
+      emergencyBusy = false;
+    }
+  }
+
+  onMount(() => {
+    void (async () => {
+      await Promise.all([loadAuthStatus(), loadHealthVersion()]);
+      await syncRoute();
+    })();
+
+    const stream = connectStream((eventName) => {
+      if (eventName === 'emergency_stop') {
+        void loadHealthVersion();
+      }
+    });
+
+    return () => {
+      stream.close();
+    };
   });
 
   $effect(() => {
@@ -150,6 +176,19 @@
     </aside>
 
     <main class="ml-56 h-screen overflow-y-auto p-6">
+      {#if emergencyStop}
+        <div class="mb-4 flex items-center justify-between gap-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+          <p class="text-sm font-medium text-warning">Emergency Stop Active — All agent requests are paused.</p>
+          <button
+            type="button"
+            class="rounded-md bg-success px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+            disabled={emergencyBusy}
+            onclick={resumeOperations}
+          >
+            Resume Operations
+          </button>
+        </div>
+      {/if}
       {@render children()}
     </main>
   </div>

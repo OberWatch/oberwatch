@@ -2,9 +2,18 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/OberWatch/oberwatch/internal/alert"
+	"github.com/OberWatch/oberwatch/internal/config"
+)
+
+var (
+	// ErrAgentNotFound indicates no persisted agent exists for the requested name.
+	ErrAgentNotFound = errors.New("agent not found")
+	// ErrAgentExists indicates a rename or insert collided with an existing agent name.
+	ErrAgentExists = errors.New("agent already exists")
 )
 
 // Store defines persistence operations used by proxy, budget, and dashboard APIs.
@@ -13,6 +22,10 @@ type Store interface {
 	QueryCosts(context.Context, CostQuery) ([]CostAggregate, error)
 	SaveAlert(context.Context, alert.Alert) error
 	QueryAlerts(context.Context, AlertQuery) ([]alert.Alert, error)
+	UpsertAgent(context.Context, AgentRecord) error
+	GetAgent(context.Context, string) (AgentRecord, bool, error)
+	ListAgents(context.Context) ([]AgentRecord, error)
+	RenameAgent(context.Context, string, string) error
 	SaveBudgetSnapshot(context.Context, BudgetSnapshot) error
 	LoadBudgetSnapshots(context.Context) ([]BudgetSnapshot, error)
 	GetSetting(context.Context, string) (string, bool, error)
@@ -83,6 +96,25 @@ type BudgetSnapshot struct {
 	LastAlertedPct  float64
 	Killed          bool
 	UpdatedAt       time.Time
+}
+
+// AgentRecord is the SQLite-backed source of truth for one tracked agent.
+//
+//nolint:govet // keep persisted agent fields grouped by API/domain semantics.
+type AgentRecord struct {
+	Name                  string
+	Status                string
+	BudgetLimitUSD        float64
+	BudgetSpentUSD        float64
+	BudgetPeriod          config.BudgetPeriod
+	ActionOnExceed        config.BudgetAction
+	DowngradeChain        []string
+	DowngradeThresholdPct float64
+	AlertThresholdsPct    []float64
+	PeriodStartedAt       time.Time
+	PeriodResetsAt        time.Time
+	FirstSeenAt           time.Time
+	LastSeenAt            time.Time
 }
 
 // CostRecordSink is a non-blocking enqueue target for async cost persistence.

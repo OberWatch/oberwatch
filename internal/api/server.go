@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ import (
 const (
 	basePath = "/_oberwatch/api/v1"
 )
+
+var validAgentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // Server serves management API endpoints.
 //
@@ -181,9 +184,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/budgets", s.handleBudgets)
 	s.mux.HandleFunc(basePath+"/budgets/", s.handleBudgetByAgent)
 	s.mux.HandleFunc(basePath+"/kill-all", s.handleKillAll)
+	s.mux.HandleFunc(basePath+"/resume", s.handleResume)
 	s.mux.HandleFunc(basePath+"/costs", s.handleCosts)
 	s.mux.HandleFunc(basePath+"/costs/export", s.handleCostsExport)
 	s.mux.HandleFunc(basePath+"/agents", s.handleAgents)
+	s.mux.HandleFunc(basePath+"/agents/", s.handleAgentByName)
 	s.mux.HandleFunc(basePath+"/stream", s.handleStream)
 }
 
@@ -198,6 +203,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version":         s.version,
 		"uptime_seconds":  int(time.Since(s.startedAt).Seconds()),
 		"storage_backend": s.storageBackend,
+		"emergency_stop":  s.budget != nil && s.budget.EmergencyStop(),
 		"providers":       s.providerHealth,
 	})
 }
@@ -234,17 +240,23 @@ func (s *Server) handleBudgets(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w)
 		return
 	}
-	if s.budget == nil {
-		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+	if s.budget == nil || s.store == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager or storage is not configured", "", 0, 0)
 		return
 	}
 
-	views := s.budget.ListBudgets()
-	items := make([]map[string]any, 0, len(views))
+	records, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+		return
+	}
+
+	items := make([]map[string]any, 0, len(records))
 	globalSpent := 0.0
-	for _, view := range views {
+	for _, record := range records {
+		view := s.budget.GetBudget(record.Name)
 		globalSpent += view.SpentUSD
-		items = append(items, encodeBudgetView(view))
+		items = append(items, encodeBudgetRecord(record, view))
 	}
 
 	globalRemaining := 0.0
@@ -288,7 +300,20 @@ func (s *Server) handleBudgetAgentCRUD(w http.ResponseWriter, r *http.Request, a
 
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, encodeBudgetView(s.budget.GetBudget(agent)))
+		if s.store == nil {
+			writeError(w, http.StatusInternalServerError, "config_error", "storage is not configured", agent, 0, 0)
+			return
+		}
+		record, found, err := s.store.GetAgent(r.Context(), agent)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), agent, 0, 0)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "config_error", "budget agent not found", agent, 0, 0)
+			return
+		}
+		writeJSON(w, http.StatusOK, encodeBudgetRecord(record, s.budget.GetBudget(agent)))
 	case http.MethodPut:
 		//nolint:govet // Keep payload fields grouped to mirror API contract order.
 		var payload struct {
@@ -316,7 +341,12 @@ func (s *Server) handleBudgetAgentCRUD(w http.ResponseWriter, r *http.Request, a
 			return
 		}
 
-		writeJSON(w, http.StatusOK, encodeBudgetView(s.budget.GetBudget(agent)))
+		record, _, err := s.store.GetAgent(r.Context(), agent)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), agent, 0, 0)
+			return
+		}
+		writeJSON(w, http.StatusOK, encodeBudgetRecord(record, s.budget.GetBudget(agent)))
 	default:
 		writeMethodNotAllowed(w)
 	}
@@ -359,7 +389,34 @@ func (s *Server) handleKillAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.budget.SetEmergencyStop(true)
-	s.publish("agent_killed", map[string]any{"agent": "*", "reason": "emergency_stop"})
+	if s.store != nil {
+		if err := s.store.SetSetting(r.Context(), "emergency_stop", "true"); err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+			return
+		}
+	}
+	s.publish("emergency_stop", map[string]any{"enabled": true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w)
+		return
+	}
+	if s.budget == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+		return
+	}
+
+	s.budget.SetEmergencyStop(false)
+	if s.store != nil {
+		if err := s.store.SetSetting(r.Context(), "emergency_stop", "false"); err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+			return
+		}
+	}
+	s.publish("emergency_stop", map[string]any{"enabled": false})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -468,16 +525,19 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	records, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+		return
+	}
 	rawCosts, err := s.store.QueryCosts(r.Context(), storage.CostQuery{})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
 		return
 	}
-	budgetViews := s.budget.ListBudgets()
-	budgetByAgent := make(map[string]budget.BudgetView, len(budgetViews))
-	for _, view := range budgetViews {
-		budgetByAgent[view.Agent] = view
-	}
+	requestsByAgent := make(map[string]int, len(rawCosts))
+	costByAgent := make(map[string]float64, len(rawCosts))
+	lastSeenByAgent := make(map[string]time.Time, len(rawCosts))
 
 	//nolint:govet // Keep summary fields grouped to mirror /agents response.
 	type agentSummary struct {
@@ -489,47 +549,41 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		BudgetStatus  string
 	}
 
-	summaries := make(map[string]*agentSummary, len(rawCosts))
 	for _, row := range rawCosts {
-		entry, exists := summaries[row.Agent]
-		if !exists {
-			view, hasBudget := budgetByAgent[row.Agent]
-			status := "unknown"
-			budgetStatus := "under_limit"
-			if hasBudget {
-				status = view.Status
-				if view.Status == "killed" {
-					budgetStatus = "killed"
-				} else if view.PercentageUsed >= 100 {
-					budgetStatus = "over_limit"
-				}
-			}
-			entry = &agentSummary{
-				Name:         row.Agent,
-				Status:       status,
-				BudgetStatus: budgetStatus,
-			}
-			summaries[row.Agent] = entry
-		}
-
-		entry.TotalRequests += row.Requests
-		entry.TotalCostUSD += row.CostUSD
+		requestsByAgent[row.Agent] += row.Requests
+		costByAgent[row.Agent] += row.CostUSD
 		if parsed, err := time.Parse(time.RFC3339Nano, row.Bucket); err == nil {
-			if parsed.After(entry.LastSeenAt) {
-				entry.LastSeenAt = parsed
+			if parsed.After(lastSeenByAgent[row.Agent]) {
+				lastSeenByAgent[row.Agent] = parsed
 			}
 		}
+	}
+
+	summaries := make([]agentSummary, 0, len(records))
+	for _, record := range records {
+		view := s.budget.GetBudget(record.Name)
+		budgetStatus := "under_limit"
+		if view.Status == "killed" {
+			budgetStatus = "killed"
+		} else if view.PercentageUsed >= 100 {
+			budgetStatus = "over_limit"
+		}
+		lastSeen := record.LastSeenAt
+		if seen := lastSeenByAgent[record.Name]; seen.After(lastSeen) {
+			lastSeen = seen
+		}
+		summaries = append(summaries, agentSummary{
+			Name:          record.Name,
+			Status:        view.Status,
+			TotalRequests: requestsByAgent[record.Name],
+			TotalCostUSD:  costByAgent[record.Name],
+			LastSeenAt:    lastSeen,
+			BudgetStatus:  budgetStatus,
+		})
 	}
 
 	agents := make([]map[string]any, 0, len(summaries))
-	names := make([]string, 0, len(summaries))
-	for name := range summaries {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		entry := summaries[name]
+	for _, entry := range summaries {
 		lastSeen := ""
 		if !entry.LastSeenAt.IsZero() {
 			lastSeen = entry.LastSeenAt.UTC().Format(time.RFC3339)
@@ -545,6 +599,58 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+}
+
+func (s *Server) handleAgentByName(w http.ResponseWriter, r *http.Request) {
+	agent, action, ok := parseAgentPath(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "config_error", "agent not found", "", 0, 0)
+		return
+	}
+	if action != "rename" {
+		writeError(w, http.StatusNotFound, "config_error", "unknown agent action", agent, 0, 0)
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeMethodNotAllowed(w)
+		return
+	}
+	if s.budget == nil || s.store == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager or storage is not configured", agent, 0, 0)
+		return
+	}
+
+	var payload struct {
+		NewName string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "config_error", fmt.Sprintf("invalid rename payload: %v", err), agent, 0, 0)
+		return
+	}
+
+	newName := strings.TrimSpace(payload.NewName)
+	if !validAgentName(newName) {
+		writeError(w, http.StatusBadRequest, "config_error", "new_name must contain only letters, numbers, hyphens, or underscores", agent, 0, 0)
+		return
+	}
+
+	if err := s.budget.RenameAgent(r.Context(), agent, newName); err != nil {
+		switch err {
+		case storage.ErrAgentExists:
+			writeError(w, http.StatusConflict, "config_error", "agent with that name already exists", agent, 0, 0)
+		case storage.ErrAgentNotFound:
+			writeError(w, http.StatusNotFound, "config_error", "agent not found", agent, 0, 0)
+		default:
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), agent, 0, 0)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "ok",
+		"old_name": agent,
+		"new_name": newName,
+	})
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -670,17 +776,39 @@ func parseBudgetPath(path string) (string, string, bool) {
 	return agent, action, true
 }
 
-func encodeBudgetView(view budget.BudgetView) map[string]any {
+func parseAgentPath(path string) (string, string, bool) {
+	relative := strings.TrimPrefix(path, basePath+"/agents/")
+	segments := strings.Split(strings.Trim(relative, "/"), "/")
+	if len(segments) == 0 || strings.TrimSpace(segments[0]) == "" {
+		return "", "", false
+	}
+
+	agent := strings.TrimSpace(segments[0])
+	action := ""
+	if len(segments) > 1 {
+		action = strings.TrimSpace(segments[1])
+	}
+	return agent, action, true
+}
+
+func validAgentName(name string) bool {
+	return validAgentNamePattern.MatchString(strings.TrimSpace(name))
+}
+
+func encodeBudgetRecord(record storage.AgentRecord, view budget.BudgetView) map[string]any {
 	return map[string]any{
-		"agent":            view.Agent,
-		"period":           view.Period,
-		"limit_usd":        view.LimitUSD,
-		"spent_usd":        view.SpentUSD,
-		"remaining_usd":    view.RemainingUSD,
-		"percentage_used":  view.PercentageUsed,
-		"status":           view.Status,
-		"action_on_exceed": view.ActionOnExceed,
-		"period_resets_at": view.PeriodResetsAt.UTC().Format(time.RFC3339),
+		"agent":                   view.Agent,
+		"period":                  view.Period,
+		"limit_usd":               view.LimitUSD,
+		"spent_usd":               view.SpentUSD,
+		"remaining_usd":           view.RemainingUSD,
+		"percentage_used":         view.PercentageUsed,
+		"status":                  view.Status,
+		"action_on_exceed":        view.ActionOnExceed,
+		"downgrade_chain":         record.DowngradeChain,
+		"downgrade_threshold_pct": record.DowngradeThresholdPct,
+		"alert_thresholds_pct":    record.AlertThresholdsPct,
+		"period_resets_at":        view.PeriodResetsAt.UTC().Format(time.RFC3339),
 	}
 }
 
