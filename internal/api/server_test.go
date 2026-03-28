@@ -798,6 +798,29 @@ func TestServer_StreamSendsCostAndAlertEvents(t *testing.T) {
 	}
 }
 
+func TestServer_PublishAlertPersistsAlert(t *testing.T) {
+	t.Parallel()
+
+	server, _, store := newTestServer(t)
+	entry := alert.NewBudgetThresholdAlert("email-agent", 80, 8, 10, "alert", time.Now().UTC())
+
+	server.PublishAlert(entry)
+
+	results, err := store.QueryAlerts(context.Background(), storage.AlertQuery{Agent: "email-agent"})
+	if err != nil {
+		t.Fatalf("QueryAlerts() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(QueryAlerts()) = %d, want 1", len(results))
+	}
+	if results[0].Type != alert.TypeBudgetThreshold {
+		t.Fatalf("stored alert type = %q, want %q", results[0].Type, alert.TypeBudgetThreshold)
+	}
+	if results[0].ThresholdPct != 80 {
+		t.Fatalf("stored threshold = %v, want 80", results[0].ThresholdPct)
+	}
+}
+
 func TestServer_SetupLoginLogoutAndPasswordChange(t *testing.T) {
 	t.Parallel()
 

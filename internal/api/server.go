@@ -122,6 +122,10 @@ func (s *Server) PublishCostUpdate(record storage.CostRecord) {
 
 // PublishAlert broadcasts budget_alert or agent_killed SSE events.
 func (s *Server) PublishAlert(entry alert.Alert) {
+	if s.store != nil {
+		_ = s.store.SaveAlert(context.Background(), entry)
+	}
+
 	if entry.Type == alert.TypeAgentKilled {
 		reason := "agent_killed"
 		if reasonValue, ok := entry.Data["reason"]; ok {

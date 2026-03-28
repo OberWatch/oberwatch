@@ -386,8 +386,27 @@ func (s *SQLiteStore) SaveAlert(ctx context.Context, entry alert.Alert) error {
 	}
 
 	dataJSON := ""
+	payload := make(map[string]any)
+	if entry.ThresholdPct != 0 {
+		payload["threshold_pct"] = entry.ThresholdPct
+	}
+	if entry.SpentUSD != 0 {
+		payload["spent_usd"] = entry.SpentUSD
+	}
+	if entry.LimitUSD != 0 {
+		payload["limit_usd"] = entry.LimitUSD
+	}
+	if entry.Action != "" {
+		payload["action"] = entry.Action
+	}
+	if !entry.PeriodStartedAt.IsZero() {
+		payload["period_started_at"] = entry.PeriodStartedAt.UTC().Format(time.RFC3339Nano)
+	}
 	if len(entry.Data) > 0 {
-		encoded, err := json.Marshal(entry.Data)
+		payload["data"] = entry.Data
+	}
+	if len(payload) > 0 {
+		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("marshal alert data: %w", err)
 		}
@@ -467,8 +486,33 @@ func (s *SQLiteStore) QueryAlerts(ctx context.Context, query AlertQuery) ([]aler
 		}
 		item.Timestamp = parsedTime.UTC()
 		if strings.TrimSpace(dataJSON) != "" {
-			if err := json.Unmarshal([]byte(dataJSON), &item.Data); err != nil {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(dataJSON), &payload); err != nil {
 				return nil, fmt.Errorf("decode alert data_json: %w", err)
+			}
+			if value, ok := payload["threshold_pct"].(float64); ok {
+				item.ThresholdPct = value
+			}
+			if value, ok := payload["spent_usd"].(float64); ok {
+				item.SpentUSD = value
+			}
+			if value, ok := payload["limit_usd"].(float64); ok {
+				item.LimitUSD = value
+			}
+			if value, ok := payload["action"].(string); ok {
+				item.Action = value
+			}
+			if value, ok := payload["period_started_at"].(string); ok && strings.TrimSpace(value) != "" {
+				parsedPeriodStart, err := time.Parse(time.RFC3339Nano, value)
+				if err != nil {
+					return nil, fmt.Errorf("parse alert period_started_at: %w", err)
+				}
+				item.PeriodStartedAt = parsedPeriodStart.UTC()
+			}
+			if nested, ok := payload["data"].(map[string]any); ok {
+				item.Data = nested
+			} else {
+				item.Data = payload
 			}
 		}
 		alerts = append(alerts, item)

@@ -4,7 +4,7 @@
   import { page } from '$app/state';
   import { fetchJSON } from '$lib/api';
   import { connectStream } from '$lib/sse';
-  import type { AuthStatusResponse, HealthResponse } from '$lib/types';
+  import type { AuthStatusResponse, BudgetAlertEvent, HealthResponse } from '$lib/types';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -35,6 +35,8 @@
   let displayVersion = $state('v0.1.0');
   let emergencyStop = $state(false);
   let emergencyBusy = $state(false);
+  let alertToasts = $state<{ id: number; agent: string; threshold: number }[]>([]);
+  let nextToastID = 1;
 
   function isActive(pathname: string, href: string): boolean {
     if (href === '/') {
@@ -104,13 +106,26 @@
     }
   }
 
+  function showBudgetAlertToast(event: BudgetAlertEvent): void {
+    const threshold = Math.round(event.threshold_pct ?? 0);
+    const id = nextToastID++;
+    alertToasts = [...alertToasts, { id, agent: event.agent || 'unknown', threshold }];
+
+    window.setTimeout(() => {
+      alertToasts = alertToasts.filter((toast) => toast.id !== id);
+    }, 5000);
+  }
+
   onMount(() => {
     void (async () => {
       await Promise.all([loadAuthStatus(), loadHealthVersion()]);
       await syncRoute();
     })();
 
-    const stream = connectStream((eventName) => {
+    const stream = connectStream((eventName, data) => {
+      if (eventName === 'budget_alert') {
+        showBudgetAlertToast(data as BudgetAlertEvent);
+      }
       if (eventName === 'emergency_stop') {
         void loadHealthVersion();
       }
@@ -176,6 +191,18 @@
     </aside>
 
     <main class="ml-56 h-screen overflow-y-auto p-6">
+      {#if alertToasts.length > 0}
+        <div class="pointer-events-none fixed right-6 top-6 z-50 flex w-full max-w-sm flex-col gap-3">
+          {#each alertToasts as toast (toast.id)}
+            <div class="rounded-lg border border-warning/40 bg-surface/95 px-4 py-3 shadow-2xl backdrop-blur">
+              <p class="text-sm font-semibold text-warning">Budget Threshold Reached</p>
+              <p class="mt-1 text-sm text-text-primary">
+                Agent <span class="font-medium">{toast.agent}</span> crossed {toast.threshold}% of its budget.
+              </p>
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if emergencyStop}
         <div class="mb-4 flex items-center justify-between gap-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
           <p class="text-sm font-medium text-warning">Emergency Stop Active — All agent requests are paused.</p>

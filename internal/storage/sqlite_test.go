@@ -63,6 +63,7 @@ func TestSQLiteStore_SchemaAutoCreation(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestSQLiteStore_SaveAndQueryCosts(t *testing.T) {
@@ -336,6 +337,17 @@ func TestSQLiteStore_SaveAndQueryAlerts(t *testing.T) {
 				t.Fatalf("len(QueryAlerts()) = %d, want %d", len(results), tt.wantRows)
 			}
 		})
+	}
+
+	results, err := store.QueryAlerts(ctx, AlertQuery{Agent: "agent-a"})
+	if err != nil {
+		t.Fatalf("QueryAlerts(agent-a) error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(QueryAlerts(agent-a)) = %d, want 1", len(results))
+	}
+	if results[0].Data["threshold"] != float64(80) {
+		t.Fatalf("results[0].Data[threshold] = %v, want 80", results[0].Data["threshold"])
 	}
 }
 
