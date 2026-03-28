@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { fetchJSON } from '$lib/api';
-  import type { AuthStatusResponse } from '$lib/types';
+  import type { AuthStatusResponse, HealthResponse } from '$lib/types';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -31,6 +31,7 @@
   let authLoading = $state(true);
   let authStatus = $state<AuthStatusResponse | null>(null);
   let logoutError = $state<string | null>(null);
+  let displayVersion = $state('v0.1.0');
 
   function isActive(pathname: string, href: string): boolean {
     if (href === '/') {
@@ -44,6 +45,15 @@
       authStatus = await fetchJSON<AuthStatusResponse>('/auth/status');
     } finally {
       authLoading = false;
+    }
+  }
+
+  async function loadHealthVersion(): Promise<void> {
+    try {
+      const health = await fetchJSON<HealthResponse>('/health');
+      displayVersion = health.version;
+    } catch {
+      // Keep the default sidebar version if health is temporarily unavailable.
     }
   }
 
@@ -81,7 +91,7 @@
   }
 
   onMount(async () => {
-    await loadAuthStatus();
+    await Promise.all([loadAuthStatus(), loadHealthVersion()]);
     await syncRoute();
   });
 
@@ -99,7 +109,7 @@
     <aside class="fixed inset-y-0 left-0 z-20 flex w-56 flex-col border-r border-border-default bg-surface px-4 py-5">
       <div class="mb-8 border-b border-border-default pb-4">
         <p class="text-lg font-semibold tracking-tight">Oberwatch</p>
-        <p class="text-xs text-text-secondary">v0.1.0</p>
+        <p class="text-xs text-text-secondary">{displayVersion}</p>
       </div>
 
       <nav class="flex flex-1 flex-col gap-1">
@@ -135,7 +145,7 @@
         {#if logoutError}
           <p class="mt-2 text-xs text-danger">{logoutError}</p>
         {/if}
-        <div class="mt-3 text-xs text-text-secondary">v0.1.0</div>
+        <div class="mt-3 text-xs text-text-secondary">{displayVersion}</div>
       </div>
     </aside>
 

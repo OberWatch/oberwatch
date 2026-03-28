@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { ChartDataset } from 'chart.js';
   import { fetchJSON } from '$lib/api';
+  import { formatUSD } from '$lib/currency';
   import { connectStream } from '$lib/sse';
   import { AlertItem, KPICard, LineChart } from '$lib/components';
   import type {
@@ -40,14 +41,6 @@
       backgroundColor: '#3B82F6'
     }
   ]);
-
-  function formatUSD(amount: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(amount);
-  }
 
   function formatUptime(seconds: number): string {
     if (seconds < 60) return `${seconds}s`;

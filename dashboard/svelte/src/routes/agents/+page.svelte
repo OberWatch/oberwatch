@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchJSON } from '$lib/api';
+  import { formatUSD } from '$lib/currency';
   import { BudgetBar, DataTable, StatusBadge } from '$lib/components';
   import type { Budget, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
@@ -58,14 +59,6 @@
     lastSeenAt: lastSeenCell,
     actions: actionsCell
   }));
-
-  function formatUSD(value: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(value);
-  }
 
   function relativeTime(timestamp?: string): string {
     if (!timestamp) {

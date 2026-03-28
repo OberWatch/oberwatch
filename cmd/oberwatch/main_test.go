@@ -315,7 +315,7 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 				t.Fatalf("Execute() error = %v", err)
 			}
 			out := stdout.String()
-			want := "oberwatch " + version
+			want := "oberwatch " + displayVersion()
 			if !strings.Contains(out, want) {
 				t.Fatalf("stdout = %q, want substring %q", out, want)
 			}
@@ -325,6 +325,22 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDisplayVersion_AppendsChannel(t *testing.T) {
+	originalVersion := version
+	originalChannel := channel
+	t.Cleanup(func() {
+		version = originalVersion
+		channel = originalChannel
+	})
+
+	version = "v1.2.3"
+	channel = "beta"
+
+	if got := displayVersion(); got != "v1.2.3 (beta)" {
+		t.Fatalf("displayVersion() = %q, want %q", got, "v1.2.3 (beta)")
 	}
 }
 

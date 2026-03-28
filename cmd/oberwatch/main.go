@@ -32,6 +32,7 @@ import (
 
 var (
 	version = "v0.1.0"
+	channel = "dev"
 	commit  = "dev"
 	built   = "unknown"
 )
@@ -519,7 +520,7 @@ func printVersion(w io.Writer) error {
 	_, err := fmt.Fprintf(
 		w,
 		"oberwatch %s\ncommit: %s\nbuilt: %s\ngo: %s\nos/arch: %s/%s\n",
-		version,
+		displayVersion(),
 		commit,
 		built,
 		runtime.Version(),
@@ -535,6 +536,20 @@ func maybePrintVersion(w io.Writer, showVersion bool) (bool, error) {
 	}
 
 	return true, printVersion(w)
+}
+
+func displayVersion() string {
+	cleanVersion := strings.TrimSpace(version)
+	if cleanVersion == "" {
+		cleanVersion = "v0.0.0"
+	}
+
+	cleanChannel := strings.TrimSpace(channel)
+	if cleanChannel == "" {
+		return cleanVersion
+	}
+
+	return fmt.Sprintf("%s (%s)", cleanVersion, cleanChannel)
 }
 
 func loadRuntimeConfig(cmd *cobra.Command, rootOpts *rootOptions) (config.Config, string, error) {
@@ -685,7 +700,7 @@ func runServeRuntime(
 	})
 
 	budgetManager := budget.NewManagerWithClockAndDispatcher(cfg.Gate, logger, nil, dispatcher)
-	managementServer = api.New(cfg, budgetManager, store, version)
+	managementServer = api.New(cfg, budgetManager, store, displayVersion())
 
 	hooks := proxy.Hooks{
 		Management: managementServer,

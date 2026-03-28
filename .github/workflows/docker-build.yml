@@ -34,7 +34,8 @@ jobs:
           context: .
           push: true
           build-args: |
-            VERSION=${{ github.sha }}
+            CHANNEL=${{ steps.tag.outputs.tag }}
+            COMMIT=${{ github.sha }}
           tags: |
             ghcr.io/oberwatch/oberwatch:${{ steps.tag.outputs.tag }}
             ghcr.io/oberwatch/oberwatch:sha-${{ github.sha }}

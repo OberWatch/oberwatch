@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/OberWatch/oberwatch/internal/config"
 )
 
 const tokensPerByteEstimateDivisor = 4
+
+var anthropicSnapshotSuffixPattern = regexp.MustCompile(`-\d{8}$`)
 
 var defaultPricingTable = NewPricingTable(nil, nil)
 
@@ -258,5 +261,9 @@ func estimateTokensFromBodyLength(responseLength int) int {
 }
 
 func normalizeModel(model string) string {
-	return strings.ToLower(strings.TrimSpace(model))
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalized, "claude-") {
+		normalized = anthropicSnapshotSuffixPattern.ReplaceAllString(normalized, "")
+	}
+	return normalized
 }

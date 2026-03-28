@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatUSD } from '$lib/currency';
+
   let {
     percentage,
     spentUSD,
@@ -14,21 +16,9 @@
     clampedPercent < 50 ? 'bg-success' : clampedPercent < 80 ? 'bg-warning' : 'bg-danger'
   );
 
-  const formattedSpent = $derived(
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(spentUSD)
-  );
+  const formattedSpent = $derived(formatUSD(spentUSD));
 
-  const formattedLimit = $derived(
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(limitUSD)
-  );
+  const formattedLimit = $derived(formatUSD(limitUSD));
 </script>
 
 <div class="w-full">

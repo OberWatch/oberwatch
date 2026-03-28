@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { ChartDataset } from 'chart.js';
   import { fetchBlob, fetchJSON } from '$lib/api';
+  import { formatUSD } from '$lib/currency';
   import { BarChart, DataTable, DateRangePicker, KPICard, LineChart } from '$lib/components';
   import type { CostBreakdown, CostsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
@@ -102,14 +103,6 @@
     }
     parsed.setMinutes(0, 0, 0);
     return parsed.toISOString();
-  }
-
-  function formatUSD(value: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(value);
   }
 
   function fromForRange(range: DateRangePreset): string {
