@@ -171,6 +171,39 @@ port = 0
 	}
 }
 
+func TestLoadRuntime_DefaultsWithoutConfigFile(t *testing.T) {
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
+	workDir := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("OBERWATCH_SERVER__PORT", "8181")
+	chdirErr := os.Chdir(workDir)
+	if chdirErr != nil {
+		t.Fatalf("Chdir() error = %v", chdirErr)
+	}
+	t.Cleanup(func() {
+		restoreErr := os.Chdir(origWD)
+		if restoreErr != nil {
+			t.Fatalf("restore cwd: %v", restoreErr)
+		}
+	})
+
+	cfg, source, err := LoadRuntime("")
+	if err != nil {
+		t.Fatalf("LoadRuntime() error = %v", err)
+	}
+	if source != "(defaults/env only)" {
+		t.Fatalf("LoadRuntime() source = %q, want defaults label", source)
+	}
+	if cfg.Server.Port != 8181 {
+		t.Fatalf("LoadRuntime() port = %d, want 8181", cfg.Server.Port)
+	}
+}
+
 func TestApplyEnvOverrides_TableDriven(t *testing.T) {
 	tests := []struct {
 		check   func(Config) any

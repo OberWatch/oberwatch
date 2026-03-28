@@ -197,6 +197,45 @@ func TestServeAndGate_BannerReflectsFlags(t *testing.T) {
 	}
 }
 
+func TestServe_UsesDefaultsWhenNoConfigFileExists(t *testing.T) {
+	t.Setenv("OW_TEST_MODE", "1")
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	workDir := t.TempDir()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"serve"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"Proxy:     http://0.0.0.0:8080",
+		"Dashboard: http://0.0.0.0:8080",
+		"Config:    (defaults/env only)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+}
+
 func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 	tests := []struct {
 		args       string

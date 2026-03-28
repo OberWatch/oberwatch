@@ -56,7 +56,7 @@ func run() error {
 
 func newRootCmd() *cobra.Command {
 	opts := &rootOptions{
-		configPath: "./oberwatch.toml",
+		configPath: "",
 		logLevel:   string(config.LogLevelInfo),
 		logFormat:  string(config.LogFormatText),
 	}
@@ -80,7 +80,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringVarP(&opts.configPath, "config", "c", "./oberwatch.toml", "Path to config file")
+	rootCmd.PersistentFlags().StringVarP(&opts.configPath, "config", "c", "", "Path to config file")
 	rootCmd.PersistentFlags().StringVar(&opts.logLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	rootCmd.PersistentFlags().StringVar(&opts.logFormat, "log-format", "text", "Log format: text, json")
 	rootCmd.PersistentFlags().BoolVarP(&opts.showVersion, "version", "v", false, "Print version and exit")
@@ -122,7 +122,7 @@ func newServeCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			cfg, err := loadRuntimeConfig(cmd, rootOpts)
+			cfg, configLabel, err := loadRuntimeConfig(cmd, rootOpts)
 			if err != nil {
 				return err
 			}
@@ -162,7 +162,7 @@ func newServeCmd(rootOpts *rootOptions) *cobra.Command {
 
 			if _, err = fmt.Fprint(cmd.OutOrStdout(), renderStartupBanner(startupBannerOptions{
 				host:             host,
-				configPath:       rootOpts.configPath,
+				configPath:       configLabel,
 				port:             port,
 				dashboardEnabled: dashboardEnabled,
 				gateEnabled:      gateEnabled,
@@ -209,7 +209,7 @@ func newGateCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			cfg, err := loadRuntimeConfig(cmd, rootOpts)
+			cfg, configLabel, err := loadRuntimeConfig(cmd, rootOpts)
 			if err != nil {
 				return err
 			}
@@ -234,7 +234,7 @@ func newGateCmd(rootOpts *rootOptions) *cobra.Command {
 
 			_, err = fmt.Fprint(cmd.OutOrStdout(), renderStartupBanner(startupBannerOptions{
 				host:             host,
-				configPath:       rootOpts.configPath,
+				configPath:       configLabel,
 				port:             port,
 				dashboardEnabled: false,
 				gateEnabled:      true,
@@ -275,7 +275,7 @@ func newTraceCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			cfg, err := loadRuntimeConfig(cmd, rootOpts)
+			cfg, _, err := loadRuntimeConfig(cmd, rootOpts)
 			if err != nil {
 				return err
 			}
@@ -371,7 +371,7 @@ func newTestRunCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			cfg, err := loadRuntimeConfig(cmd, rootOpts)
+			cfg, _, err := loadRuntimeConfig(cmd, rootOpts)
 			if err != nil {
 				return err
 			}
@@ -537,10 +537,10 @@ func maybePrintVersion(w io.Writer, showVersion bool) (bool, error) {
 	return true, printVersion(w)
 }
 
-func loadRuntimeConfig(cmd *cobra.Command, rootOpts *rootOptions) (config.Config, error) {
-	cfg, err := config.Load(rootOpts.configPath)
+func loadRuntimeConfig(cmd *cobra.Command, rootOpts *rootOptions) (config.Config, string, error) {
+	cfg, configLabel, err := config.LoadRuntime(rootOpts.configPath)
 	if err != nil {
-		return config.Config{}, err
+		return config.Config{}, "", err
 	}
 	if cmd.Flags().Changed("log-level") {
 		cfg.Server.LogLevel = config.LogLevel(rootOpts.logLevel)
@@ -549,7 +549,7 @@ func loadRuntimeConfig(cmd *cobra.Command, rootOpts *rootOptions) (config.Config
 		cfg.Server.LogFormat = config.LogFormat(rootOpts.logFormat)
 	}
 
-	return cfg, nil
+	return cfg, configLabel, nil
 }
 
 func validateGlobalFlags(logLevel, logFormat string) error {

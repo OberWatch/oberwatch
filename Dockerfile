@@ -24,4 +24,4 @@ EXPOSE 8080
 VOLUME ["/data"]
 
 ENTRYPOINT ["oberwatch"]
-CMD ["serve", "--config", "/etc/oberwatch/oberwatch.toml"]
+CMD ["serve"]

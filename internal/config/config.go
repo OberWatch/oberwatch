@@ -336,6 +336,37 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadRuntime loads a runtime configuration. If no explicit path is provided and
+// no config file is found in the documented search order, it falls back to the
+// built-in defaults plus environment overrides.
+func LoadRuntime(path string) (Config, string, error) {
+	if path != "" {
+		cfg, err := Load(path)
+		if err != nil {
+			return Config{}, "", err
+		}
+		return cfg, path, nil
+	}
+
+	if found := FindConfigFile(); found != "" {
+		cfg, err := Load(found)
+		if err != nil {
+			return Config{}, "", err
+		}
+		return cfg, found, nil
+	}
+
+	cfg := DefaultConfig()
+	if err := applyEnvOverrides(&cfg, os.Environ()); err != nil {
+		return Config{}, "", err
+	}
+	if err := Validate(cfg); err != nil {
+		return Config{}, "", fmt.Errorf("validate runtime config: %w", err)
+	}
+
+	return cfg, "(defaults/env only)", nil
+}
+
 func resolveConfigPath(path string) (string, error) {
 	if path != "" {
 		return path, nil
