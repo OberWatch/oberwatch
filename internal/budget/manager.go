@@ -18,6 +18,13 @@ import (
 
 const unknownAgent = "unknown"
 
+const (
+	disableReasonNone           = ""
+	disableReasonBudgetExceeded = "budget_exceeded"
+	disableReasonManualKill     = "manual_kill"
+	disableReasonRunaway        = "runaway_detected"
+)
+
 // Action is the budget enforcement decision returned by CheckBudget.
 type Action string
 
@@ -74,6 +81,7 @@ type agentState struct {
 	requestTimes    []time.Time
 	triggeredAlerts map[float64]bool
 	killed          bool
+	disableReason   string
 	dirty           bool
 }
 
@@ -368,6 +376,7 @@ func (m *BudgetManager) CheckBudgetDetailed(agent string, estimatedCostUSD float
 
 	if m.registerRequestAndDetectRunawayLocked(state, now) {
 		state.killed = true
+		state.disableReason = disableReasonRunaway
 		state.dirty = true
 		queuedAlerts = append(
 			queuedAlerts,
@@ -532,6 +541,7 @@ func (m *BudgetManager) KillAgent(agent string) {
 	policy := m.policyForAgentLocked(normalizedAgent)
 	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	state.killed = true
+	state.disableReason = disableReasonManualKill
 	state.lastSeenAt = now
 	state.dirty = true
 	queuedAlerts = append(queuedAlerts, alert.NewAgentKilledAlert(normalizedAgent, "manual_kill"))
@@ -551,6 +561,7 @@ func (m *BudgetManager) EnableAgent(agent string) {
 	policy := m.policyForAgentLocked(normalizedAgent)
 	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)
 	state.killed = false
+	state.disableReason = disableReasonNone
 	state.lastSeenAt = now
 	state.dirty = true
 }
@@ -641,6 +652,7 @@ func (m *BudgetManager) overLimitDecision(agent string, policy agentPolicy, stat
 		decision.Action = ActionAlert
 	case config.BudgetActionKill:
 		state.killed = true
+		state.disableReason = disableReasonBudgetExceeded
 		state.dirty = true
 		decision.Action = ActionKill
 		decision.Code = "agent_killed"
@@ -704,6 +716,10 @@ func (m *BudgetManager) maybeResetPeriodLocked(state *agentState, policy agentPo
 	state.periodResetsAt = nextPeriodReset(now, policy.period)
 	state.triggeredAlerts = make(map[float64]bool)
 	state.lastAlertedPct = 0
+	if state.disableReason == disableReasonBudgetExceeded || legacyBudgetKill(policy, state) {
+		state.killed = false
+		state.disableReason = disableReasonNone
+	}
 	state.dirty = true
 }
 
@@ -834,7 +850,8 @@ func (m *BudgetManager) loadPersistedAgents(ctx context.Context) error {
 			periodResetsAt:  firstNonZeroTime(record.PeriodResetsAt, nextPeriodReset(firstNonZeroTime(record.PeriodStartedAt, now), record.BudgetPeriod)),
 			lastSeenAt:      firstNonZeroTime(record.LastSeenAt, now),
 			triggeredAlerts: triggeredAlerts(record.AlertThresholdsPct, record.BudgetLimitUSD, record.BudgetSpentUSD),
-			killed:          strings.EqualFold(record.Status, "killed"),
+			killed:          persistedAgentDisabled(record.Status),
+			disableReason:   persistedDisableReason(record.Status, record.BudgetLimitUSD, record.BudgetSpentUSD, record.ActionOnExceed),
 			dirty:           false,
 		}
 		m.knownAgents[agent] = struct{}{}
@@ -962,10 +979,7 @@ func (m *BudgetManager) snapshotDirtyAgentRecords() []storage.AgentRecord {
 }
 
 func (m *BudgetManager) agentRecordLocked(agent string, policy agentPolicy, state *agentState, now time.Time) storage.AgentRecord {
-	status := "active"
-	if state.killed {
-		status = "killed"
-	}
+	status := persistedStatusForState(state)
 	firstSeenAt := state.periodStartedAt
 	if firstSeenAt.IsZero() {
 		firstSeenAt = now
@@ -1019,8 +1033,55 @@ func cloneState(state *agentState) *agentState {
 		requestTimes:    append([]time.Time(nil), state.requestTimes...),
 		triggeredAlerts: triggered,
 		killed:          state.killed,
+		disableReason:   state.disableReason,
 		dirty:           state.dirty,
 	}
+}
+
+func persistedAgentDisabled(status string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(status))
+	return normalized != "" && normalized != "active"
+}
+
+func persistedDisableReason(
+	status string,
+	limitUSD float64,
+	spentUSD float64,
+	actionOnExceed config.BudgetAction,
+) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case disableReasonBudgetExceeded:
+		return disableReasonBudgetExceeded
+	case disableReasonManualKill:
+		return disableReasonManualKill
+	case disableReasonRunaway:
+		return disableReasonRunaway
+	case "killed":
+		if limitUSD > 0 && spentUSD >= limitUSD && actionOnExceed == config.BudgetActionKill {
+			return disableReasonBudgetExceeded
+		}
+		return disableReasonManualKill
+	default:
+		return disableReasonNone
+	}
+}
+
+func persistedStatusForState(state *agentState) string {
+	if state == nil || !state.killed {
+		return "active"
+	}
+	if strings.TrimSpace(state.disableReason) != "" {
+		return state.disableReason
+	}
+	return "killed"
+}
+
+func legacyBudgetKill(policy agentPolicy, state *agentState) bool {
+	return state.killed &&
+		state.disableReason == disableReasonNone &&
+		policy.actionOnExceed == config.BudgetActionKill &&
+		policy.limitUSD > 0 &&
+		state.spentUSD >= policy.limitUSD
 }
 
 func firstNonZeroTime(value time.Time, fallback time.Time) time.Time {
@@ -1136,6 +1197,10 @@ func (m *BudgetManager) ResetBudget(agent string) {
 	state.periodResetsAt = nextPeriodReset(now, policy.period)
 	state.triggeredAlerts = make(map[float64]bool)
 	state.requestTimes = state.requestTimes[:0]
+	if state.disableReason == disableReasonBudgetExceeded || legacyBudgetKill(policy, state) {
+		state.killed = false
+		state.disableReason = disableReasonNone
+	}
 	state.lastSeenAt = now
 	state.dirty = true
 }

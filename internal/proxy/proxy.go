@@ -232,11 +232,12 @@ func gateMiddleware(hooks Hooks) func(http.Handler) http.Handler {
 			if hooks.Gate != nil {
 				hooks.Gate(r)
 			}
-			if hooks.Budget != nil && hooks.Budget.EmergencyStop() && isKnownProxyPath(r.URL.Path) {
+			isProxyRequest := isKnownProxyPath(r.URL.Path)
+			if hooks.Budget != nil && hooks.Budget.EmergencyStop() && isProxyRequest {
 				writeEmergencyStopError(w)
 				return
 			}
-			if hooks.Budget != nil && hooks.Pricing != nil {
+			if hooks.Budget != nil && hooks.Pricing != nil && isProxyRequest {
 				agent := hooks.Budget.IdentifyAgent(r)
 
 				requestBody, err := io.ReadAll(r.Body)

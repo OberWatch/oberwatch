@@ -284,6 +284,125 @@ func TestServer_EmergencyStopBlocksProxyButNotManagement(t *testing.T) {
 	}
 }
 
+func TestServer_KilledAgentOnlyBlocksProxyRoutes(t *testing.T) {
+	t.Parallel()
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	manager := budget.NewManager(cfg.Gate, nil)
+	manager.KillAgent("unknown")
+
+	proxyServer, err := New(cfg, Hooks{
+		Budget:  manager,
+		Pricing: pricing.NewPricingTableFromConfig(cfg.Pricing, nil),
+		Management: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		Dashboard: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("dashboard"))
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	t.Run("dashboard root still works", func(t *testing.T) {
+		t.Parallel()
+
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		t.Cleanup(func() {
+			_ = resp.Body.Close()
+		})
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
+		if !strings.Contains(string(body), "dashboard") {
+			t.Fatalf("body = %q, want dashboard content", string(body))
+		}
+	})
+
+	t.Run("management endpoint still works", func(t *testing.T) {
+		t.Parallel()
+
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/_oberwatch/api/v1/health", nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		t.Cleanup(func() {
+			_ = resp.Body.Close()
+		})
+
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+		}
+	})
+
+	t.Run("proxy route is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			server.URL+"/v1/chat/completions",
+			strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+		)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		t.Cleanup(func() {
+			_ = resp.Body.Close()
+		})
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTooManyRequests)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
+		if !strings.Contains(string(body), "agent_killed") {
+			t.Fatalf("body = %q, want agent_killed payload", string(body))
+		}
+	})
+}
+
 func TestProxyHelpers(t *testing.T) {
 	t.Parallel()
 

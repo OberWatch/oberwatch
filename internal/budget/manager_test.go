@@ -264,6 +264,56 @@ func TestPeriodReset(t *testing.T) {
 	}
 }
 
+func TestPeriodResetReEnablesBudgetKilledAgent(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	clock := newMockClock(start)
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.Period = config.BudgetPeriodHourly
+	cfg.DefaultBudget.ActionOnExceed = config.BudgetActionKill
+
+	manager := NewManagerWithClock(cfg, nil, clock)
+	manager.RecordSpend("agent-a", 0.5)
+
+	decision := manager.CheckBudgetDetailed("agent-a", 9.6)
+	if decision.Action != ActionKill {
+		t.Fatalf("CheckBudgetDetailed().Action = %q, want %q", decision.Action, ActionKill)
+	}
+	if got := manager.GetBudget("agent-a").Status; got != "killed" {
+		t.Fatalf("GetBudget().Status = %q, want %q", got, "killed")
+	}
+
+	clock.Advance(61 * time.Minute)
+	reset := manager.GetBudget("agent-a")
+	if reset.Status != "active" {
+		t.Fatalf("GetBudget() after period reset status = %q, want %q", reset.Status, "active")
+	}
+	if reset.SpentUSD != 0 {
+		t.Fatalf("GetBudget() after period reset spent = %v, want 0", reset.SpentUSD)
+	}
+	if action := manager.CheckBudget("agent-a", 0); action != ActionAllow {
+		t.Fatalf("CheckBudget() after period reset = %q, want %q", action, ActionAllow)
+	}
+}
+
+func TestPeriodResetDoesNotReEnableManualKilledAgent(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	clock := newMockClock(start)
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.Period = config.BudgetPeriodHourly
+
+	manager := NewManagerWithClock(cfg, nil, clock)
+	manager.KillAgent("agent-a")
+
+	clock.Advance(61 * time.Minute)
+	if got := manager.GetBudget("agent-a").Status; got != "killed" {
+		t.Fatalf("GetBudget() after period reset status = %q, want %q", got, "killed")
+	}
+}
+
 func TestKillEnableAndEmergencyStop(t *testing.T) {
 	t.Parallel()
 
