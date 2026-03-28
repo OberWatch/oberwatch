@@ -464,6 +464,202 @@ func TestServer_KillAndEnableToggleStatus(t *testing.T) {
 	}
 }
 
+func TestServer_RenameAgentEndpoint(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test case fields ordered for readability.
+	tests := []struct {
+		name       string
+		oldName    string
+		body       string
+		wantStatus int
+		prepare    func(*testing.T, storage.Store)
+	}{
+		{
+			name:       "rename succeeds and migrates cost records",
+			oldName:    "email-agent",
+			body:       `{"new_name":"billing-agent"}`,
+			wantStatus: http.StatusOK,
+			prepare: func(t *testing.T, store storage.Store) {
+				t.Helper()
+				seedCostRecords(t, store, []storage.CostRecord{
+					{Agent: "email-agent", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.1, CreatedAt: time.Now().UTC()},
+				})
+			},
+		},
+		{
+			name:       "rename rejects invalid names",
+			oldName:    "email-agent",
+			body:       `{"new_name":"bad name"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "rename rejects conflicts",
+			oldName:    "email-agent",
+			body:       `{"new_name":"other-agent"}`,
+			wantStatus: http.StatusConflict,
+			prepare: func(t *testing.T, store storage.Store) {
+				t.Helper()
+				if err := store.UpsertAgent(context.Background(), storage.AgentRecord{
+					Name:            "other-agent",
+					Status:          "active",
+					BudgetPeriod:    config.BudgetPeriodDaily,
+					ActionOnExceed:  config.BudgetActionAlert,
+					FirstSeenAt:     time.Now().UTC(),
+					LastSeenAt:      time.Now().UTC(),
+					PeriodStartedAt: time.Now().UTC(),
+					PeriodResetsAt:  time.Now().UTC().Add(24 * time.Hour),
+				}); err != nil {
+					t.Fatalf("UpsertAgent(conflict seed) error = %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			if tt.prepare != nil {
+				tt.prepare(t, store)
+			}
+
+			req := httptest.NewRequest(http.MethodPut, basePath+"/agents/"+tt.oldName+"/rename", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			addAuthenticatedSessionCookie(t, store, req)
+
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+
+			if tt.wantStatus == http.StatusOK {
+				renamed, found, err := store.GetAgent(context.Background(), "billing-agent")
+				if err != nil {
+					t.Fatalf("GetAgent(renamed) error = %v", err)
+				}
+				if !found || renamed.Name != "billing-agent" {
+					t.Fatalf("renamed record = %#v, found = %v", renamed, found)
+				}
+
+				rows, err := store.QueryCosts(context.Background(), storage.CostQuery{Agent: "billing-agent", GroupBy: "agent"})
+				if err != nil {
+					t.Fatalf("QueryCosts(renamed) error = %v", err)
+				}
+				if len(rows) != 1 {
+					t.Fatalf("len(QueryCosts(renamed)) = %d, want 1", len(rows))
+				}
+			}
+		})
+	}
+}
+
+func TestServer_EmergencyStopAndResume(t *testing.T) {
+	t.Parallel()
+
+	server, manager, store := newTestServer(t)
+
+	for _, requestPath := range []string{"/kill-all", "/resume"} {
+		req := httptest.NewRequest(http.MethodPost, basePath+requestPath, nil)
+		addAuthenticatedSessionCookie(t, store, req)
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", requestPath, recorder.Code, http.StatusOK)
+		}
+	}
+
+	value, found, err := store.GetSetting(context.Background(), "emergency_stop")
+	if err != nil {
+		t.Fatalf("GetSetting(emergency_stop) error = %v", err)
+	}
+	if !found || value != "false" {
+		t.Fatalf("emergency_stop setting = %q, found = %v, want false/true", value, found)
+	}
+	if manager.EmergencyStop() {
+		t.Fatal("EmergencyStop() = true, want false after resume")
+	}
+
+	killReq := httptest.NewRequest(http.MethodPost, basePath+"/kill-all", nil)
+	addAuthenticatedSessionCookie(t, store, killReq)
+	killRecorder := httptest.NewRecorder()
+	server.ServeHTTP(killRecorder, killReq)
+	if killRecorder.Code != http.StatusOK {
+		t.Fatalf("kill-all status = %d, want %d", killRecorder.Code, http.StatusOK)
+	}
+
+	healthReq := httptest.NewRequest(http.MethodGet, basePath+"/health", nil)
+	healthRecorder := httptest.NewRecorder()
+	server.ServeHTTP(healthRecorder, healthReq)
+	if healthRecorder.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", healthRecorder.Code, http.StatusOK)
+	}
+	payload := decodeJSONMap(t, healthRecorder.Result().Body)
+	if got, ok := payload["emergency_stop"].(bool); !ok || !got {
+		t.Fatalf("health emergency_stop = %v, want true", payload["emergency_stop"])
+	}
+}
+
+func TestServer_ParseHelpers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		target     string
+		wantAgent  string
+		wantAction string
+		wantOK     bool
+	}{
+		{name: "budget path with action", target: basePath + "/budgets/email-agent/reset", wantAgent: "email-agent", wantAction: "reset", wantOK: true},
+		{name: "agent rename path", target: basePath + "/agents/unknown/rename", wantAgent: "unknown", wantAction: "rename", wantOK: true},
+		{name: "invalid budget path", target: basePath + "/budgets/", wantOK: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if strings.Contains(tt.target, "/budgets/") {
+				agent, action, ok := parseBudgetPath(tt.target)
+				if agent != tt.wantAgent || action != tt.wantAction || ok != tt.wantOK {
+					t.Fatalf("parseBudgetPath() = (%q, %q, %v), want (%q, %q, %v)", agent, action, ok, tt.wantAgent, tt.wantAction, tt.wantOK)
+				}
+				return
+			}
+
+			agent, action, ok := parseAgentPath(tt.target)
+			if agent != tt.wantAgent || action != tt.wantAction || ok != tt.wantOK {
+				t.Fatalf("parseAgentPath() = (%q, %q, %v), want (%q, %q, %v)", agent, action, ok, tt.wantAgent, tt.wantAction, tt.wantOK)
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, basePath+"/alerts?agent=email-agent&type=budget_threshold&limit=5&from=2026-03-28T10:00:00Z&to=2026-03-28T11:00:00Z", nil)
+	query, err := parseAlertQuery(req)
+	if err != nil {
+		t.Fatalf("parseAlertQuery(valid) error = %v", err)
+	}
+	if query.Agent != "email-agent" || query.Type != alert.Type("budget_threshold") || query.Limit != 5 {
+		t.Fatalf("parseAlertQuery(valid) = %#v", query)
+	}
+
+	badReq := httptest.NewRequest(http.MethodGet, basePath+"/alerts?limit=oops", nil)
+	if _, err := parseAlertQuery(badReq); err == nil {
+		t.Fatal("parseAlertQuery(invalid limit) error = nil, want non-nil")
+	}
+
+	if !validAgentName("email-agent_01") {
+		t.Fatal("validAgentName(valid) = false, want true")
+	}
+	if validAgentName("bad name") {
+		t.Fatal("validAgentName(invalid) = true, want false")
+	}
+}
+
 func TestServer_CostFiltering(t *testing.T) {
 	t.Parallel()
 
@@ -758,7 +954,7 @@ func TestServer_SetupLoginLogoutAndPasswordChange(t *testing.T) {
 	}
 }
 
-func TestServer_AgentsEndpointExcludesConfiguredButUnusedAgents(t *testing.T) {
+func TestServer_AgentsEndpointIncludesConfiguredAgentsFromSQLite(t *testing.T) {
 	t.Parallel()
 
 	server, _, store := newTestServer(t)
@@ -776,8 +972,8 @@ func TestServer_AgentsEndpointExcludesConfiguredButUnusedAgents(t *testing.T) {
 	if !ok {
 		t.Fatalf("agents type = %T, want []any", payload["agents"])
 	}
-	if len(agentsValue) != 0 {
-		t.Fatalf("len(agents) = %d, want 0", len(agentsValue))
+	if len(agentsValue) != 1 {
+		t.Fatalf("len(agents) = %d, want 1", len(agentsValue))
 	}
 }
 
@@ -794,8 +990,6 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 		},
 	}
 
-	manager := budget.NewManager(cfg.Gate, nil)
-
 	dsn := filepath.Join(t.TempDir(), "oberwatch-api-test.db")
 	sqliteStore, err := storage.NewSQLiteStore(dsn, 0, nil)
 	if err != nil {
@@ -803,6 +997,18 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 	}
 	t.Cleanup(func() {
 		_ = sqliteStore.Close()
+	})
+
+	if seedErr := budget.SeedConfiguredAgents(context.Background(), cfg.Gate, sqliteStore, nil); seedErr != nil {
+		t.Fatalf("SeedConfiguredAgents() error = %v", seedErr)
+	}
+
+	manager, err := budget.NewPersistentManager(cfg.Gate, nil, sqliteStore)
+	if err != nil {
+		t.Fatalf("NewPersistentManager() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = manager.Close()
 	})
 
 	server := New(cfg, manager, sqliteStore, "0.1.0")

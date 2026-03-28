@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -205,5 +206,122 @@ func TestServer_BudgetStreamingAccumulatesUsage(t *testing.T) {
 	snapshot := manager.Snapshot("stream-agent")
 	if snapshot.SpentUSD <= 0 {
 		t.Fatalf("stream spent = %v, want > 0", snapshot.SpentUSD)
+	}
+}
+
+func TestServer_EmergencyStopBlocksProxyButNotManagement(t *testing.T) {
+	t.Parallel()
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	manager := budget.NewManager(cfg.Gate, nil)
+	manager.SetEmergencyStop(true)
+
+	proxyServer, err := New(cfg, Hooks{
+		Budget:  manager,
+		Pricing: pricing.NewPricingTableFromConfig(cfg.Pricing, nil),
+		Management: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{name: "proxy request returns 503", path: "/v1/chat/completions", wantStatus: http.StatusServiceUnavailable},
+		{name: "management request still works", path: "/_oberwatch/api/v1/health", wantStatus: http.StatusNoContent},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`
+			if strings.Contains(tt.path, "/_oberwatch/") {
+				body = ""
+			}
+			req, err := http.NewRequest(http.MethodPost, server.URL+tt.path, strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			if tt.path == "/v1/chat/completions" {
+				req.Method = http.MethodPost
+			} else {
+				req.Method = http.MethodGet
+				req.Body = nil
+			}
+
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = resp.Body.Close()
+			})
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestProxyHelpers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		method             string
+		path               string
+		wantServeDashboard bool
+		wantKnownProxy     bool
+	}{
+		{name: "dashboard route served", method: http.MethodGet, path: "/", wantServeDashboard: true, wantKnownProxy: false},
+		{name: "proxy route not served by dashboard", method: http.MethodGet, path: "/v1/chat/completions", wantServeDashboard: false, wantKnownProxy: true},
+		{name: "non-get never serves dashboard", method: http.MethodPost, path: "/", wantServeDashboard: false, wantKnownProxy: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldServeDashboard(tt.method, tt.path); got != tt.wantServeDashboard {
+				t.Fatalf("shouldServeDashboard(%q, %q) = %v, want %v", tt.method, tt.path, got, tt.wantServeDashboard)
+			}
+			if got := isKnownProxyPath(tt.path); got != tt.wantKnownProxy {
+				t.Fatalf("isKnownProxyPath(%q) = %v, want %v", tt.path, got, tt.wantKnownProxy)
+			}
+		})
+	}
+}
+
+func TestWriteEmergencyStopError(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	writeEmergencyStopError(recorder)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "emergency_stop") {
+		t.Fatalf("body = %q, want emergency_stop payload", recorder.Body.String())
 	}
 }

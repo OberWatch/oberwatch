@@ -3,6 +3,7 @@ package budget
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
 type mockClock struct {
@@ -283,8 +285,8 @@ func TestKillEnableAndEmergencyStop(t *testing.T) {
 		t.Fatal("EmergencyStop() = false, want true")
 	}
 	decision := manager.CheckBudgetDetailed("agent-a", 0)
-	if decision.Action != ActionKill || decision.Code != "emergency_stop" {
-		t.Fatalf("emergency decision = %#v, want action=kill code=emergency_stop", decision)
+	if decision.Action != ActionAllow {
+		t.Fatalf("emergency decision = %#v, want action=allow", decision)
 	}
 	manager.SetEmergencyStop(false)
 	if manager.EmergencyStop() {
@@ -319,6 +321,88 @@ func TestRewriteModelForDowngrade(t *testing.T) {
 	}
 	if downgraded {
 		t.Fatal("downgraded for last model = true, want false")
+	}
+}
+
+func TestSeedConfiguredAgentsAndPersistentFlush(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		recordSpend float64
+	}{
+		{name: "seed writes configured agent", recordSpend: 0},
+		{name: "flush persists spend after mutation", recordSpend: 3.25},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Agents = []config.AgentBudgetConfig{
+				{
+					Name:           "email-agent",
+					LimitUSD:       12,
+					Period:         config.BudgetPeriodWeekly,
+					ActionOnExceed: config.BudgetActionDowngrade,
+					DowngradeChain: []string{"claude-opus-4-6", "claude-sonnet-4-6"},
+				},
+			}
+
+			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "budget.db"), 0, nil)
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+
+			if seedErr := SeedConfiguredAgents(context.Background(), cfg, store, nil); seedErr != nil {
+				t.Fatalf("SeedConfiguredAgents() error = %v", seedErr)
+			}
+
+			record, found, err := store.GetAgent(context.Background(), "email-agent")
+			if err != nil {
+				t.Fatalf("GetAgent() error = %v", err)
+			}
+			if !found {
+				t.Fatal("GetAgent() found = false, want true")
+			}
+			if record.BudgetLimitUSD != 12 {
+				t.Fatalf("BudgetLimitUSD = %v, want 12", record.BudgetLimitUSD)
+			}
+			if record.BudgetPeriod != config.BudgetPeriodWeekly {
+				t.Fatalf("BudgetPeriod = %q, want %q", record.BudgetPeriod, config.BudgetPeriodWeekly)
+			}
+
+			manager, err := NewPersistentManager(cfg, nil, store)
+			if err != nil {
+				t.Fatalf("NewPersistentManager() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = manager.Close()
+			})
+
+			if tt.recordSpend > 0 {
+				manager.RecordSpend("email-agent", tt.recordSpend)
+				if flushErr := manager.Flush(context.Background()); flushErr != nil {
+					t.Fatalf("Flush() error = %v", flushErr)
+				}
+
+				record, found, err = store.GetAgent(context.Background(), "email-agent")
+				if err != nil {
+					t.Fatalf("GetAgent(after flush) error = %v", err)
+				}
+				if !found {
+					t.Fatal("GetAgent(after flush) found = false, want true")
+				}
+				if record.BudgetSpentUSD != tt.recordSpend {
+					t.Fatalf("BudgetSpentUSD = %v, want %v", record.BudgetSpentUSD, tt.recordSpend)
+				}
+			}
+		})
 	}
 }
 

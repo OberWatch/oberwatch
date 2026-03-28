@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
 func TestNewRootCmd_RegistersCommands(t *testing.T) {
@@ -283,6 +287,249 @@ func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
 				t.Fatalf("Execute() error = %v, want substring %q", err, tt.wantErrSub)
 			}
+		})
+	}
+}
+
+func TestPathIsMountPointAndEmergencyStopSetting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		mountInfo         string
+		settingValue      string
+		wantMounted       bool
+		wantEmergencyStop bool
+	}{
+		{
+			name:              "mounted data path and true emergency flag",
+			mountInfo:         "36 25 0:32 / /data rw - overlay overlay rw\n",
+			settingValue:      "true",
+			wantMounted:       true,
+			wantEmergencyStop: true,
+		},
+		{
+			name:              "missing mount and false emergency flag",
+			mountInfo:         "36 25 0:32 / /tmp rw - overlay overlay rw\n",
+			settingValue:      "false",
+			wantMounted:       false,
+			wantEmergencyStop: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mountInfoPath := filepath.Join(t.TempDir(), "mountinfo")
+			if err := os.WriteFile(mountInfoPath, []byte(tt.mountInfo), 0o644); err != nil {
+				t.Fatalf("WriteFile(mountinfo) error = %v", err)
+			}
+
+			mounted, err := pathIsMountPoint(mountInfoPath, "/data")
+			if err != nil {
+				t.Fatalf("pathIsMountPoint() error = %v", err)
+			}
+			if mounted != tt.wantMounted {
+				t.Fatalf("pathIsMountPoint() = %v, want %v", mounted, tt.wantMounted)
+			}
+
+			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "settings.db"), 0, nil)
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+			if setErr := store.SetSetting(context.Background(), "emergency_stop", tt.settingValue); setErr != nil {
+				t.Fatalf("SetSetting(emergency_stop) error = %v", setErr)
+			}
+
+			enabled, err := loadEmergencyStopSetting(context.Background(), store)
+			if err != nil {
+				t.Fatalf("loadEmergencyStopSetting() error = %v", err)
+			}
+			if enabled != tt.wantEmergencyStop {
+				t.Fatalf("loadEmergencyStopSetting() = %v, want %v", enabled, tt.wantEmergencyStop)
+			}
+		})
+	}
+}
+
+func TestWarnIfContainerDataDirNotMounted_LogsWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dockerEnvPath := filepath.Join(dir, ".dockerenv")
+	mountInfoPath := filepath.Join(dir, "mountinfo")
+
+	if err := os.WriteFile(dockerEnvPath, []byte("container"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dockerenv) error = %v", err)
+	}
+	if err := os.WriteFile(mountInfoPath, []byte("36 25 0:32 / /tmp rw - overlay overlay rw\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(mountinfo) error = %v", err)
+	}
+
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	warnIfContainerDataDirNotMounted(logger, dockerEnvPath, mountInfoPath, "/data")
+
+	if !strings.Contains(logOutput.String(), "data directory is not a mounted volume") {
+		t.Fatalf("log output = %q, want mount warning", logOutput.String())
+	}
+}
+
+func TestAlertDispatchFunc_Dispatches(t *testing.T) {
+	t.Parallel()
+
+	var called bool
+	dispatcher := alertDispatchFunc(func(_ context.Context, _ alert.Alert) {
+		called = true
+	})
+	dispatcher.Dispatch(context.Background(), alert.Alert{})
+	if !called {
+		t.Fatal("Dispatch() did not invoke wrapped function")
+	}
+}
+
+func TestMainHelpers(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep helper test case fields ordered for readability.
+	tests := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{
+			name: "validate helpers cover success and failure paths",
+			run: func(t *testing.T) {
+				t.Helper()
+				if err := validateGlobalFlags("info", "text"); err != nil {
+					t.Fatalf("validateGlobalFlags(valid) error = %v", err)
+				}
+				if err := validateGlobalFlags("bad", "text"); err == nil {
+					t.Fatal("validateGlobalFlags(invalid level) error = nil, want non-nil")
+				}
+				if err := validateGlobalFlags("info", "bad"); err == nil {
+					t.Fatal("validateGlobalFlags(invalid format) error = nil, want non-nil")
+				}
+				if err := validatePort(8080, "port"); err != nil {
+					t.Fatalf("validatePort(valid) error = %v", err)
+				}
+				if err := validatePort(70000, "port"); err == nil {
+					t.Fatal("validatePort(invalid) error = nil, want non-nil")
+				}
+				if _, err := parsePositiveDuration("15s", "timeout"); err != nil {
+					t.Fatalf("parsePositiveDuration(valid) error = %v", err)
+				}
+				if _, err := parsePositiveDuration("0s", "timeout"); err == nil {
+					t.Fatal("parsePositiveDuration(zero) error = nil, want non-nil")
+				}
+			},
+		},
+		{
+			name: "file helpers cover missing path branch",
+			run: func(t *testing.T) {
+				t.Helper()
+				existingPath := filepath.Join(t.TempDir(), "exists")
+				if err := os.WriteFile(existingPath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("WriteFile(existing) error = %v", err)
+				}
+				exists, err := fileExists(existingPath)
+				if err != nil {
+					t.Fatalf("fileExists(existing) error = %v", err)
+				}
+				if !exists {
+					t.Fatal("fileExists(existing) = false, want true")
+				}
+
+				missingPath := filepath.Join(t.TempDir(), "missing")
+				exists, err = fileExists(missingPath)
+				if err != nil {
+					t.Fatalf("fileExists(missing) error = %v", err)
+				}
+				if exists {
+					t.Fatal("fileExists(missing) = true, want false")
+				}
+			},
+		},
+		{
+			name: "logger and runtime config branches execute",
+			run: func(t *testing.T) {
+				t.Helper()
+				logger := newLogger(config.LogLevelDebug, config.LogFormatJSON, &bytes.Buffer{})
+				logger.Debug("debug message")
+				textLogger := newLogger(config.LogLevelWarn, config.LogFormatText, &bytes.Buffer{})
+				textLogger.Warn("warn message")
+
+				cfgPath := writeValidConfig(t)
+				rootOpts := &rootOptions{configPath: cfgPath, logLevel: "debug", logFormat: "json"}
+				cmd := newRootCmd()
+				cmd.SetArgs([]string{"serve", "--log-level", "debug", "--log-format", "json"})
+				serveCmd, _, err := cmd.Find([]string{"serve"})
+				if err != nil {
+					t.Fatalf("Find(serve) error = %v", err)
+				}
+				if parseErr := serveCmd.ParseFlags([]string{"--log-level", "debug", "--log-format", "json"}); parseErr != nil {
+					t.Fatalf("ParseFlags() error = %v", parseErr)
+				}
+				cfg, _, err := loadRuntimeConfig(serveCmd, rootOpts)
+				if err != nil {
+					t.Fatalf("loadRuntimeConfig() error = %v", err)
+				}
+				if cfg.Server.LogLevel != config.LogLevelDebug || cfg.Server.LogFormat != config.LogFormatJSON {
+					t.Fatalf("loadRuntimeConfig() log overrides = %q/%q, want debug/json", cfg.Server.LogLevel, cfg.Server.LogFormat)
+				}
+
+				root := newRootCmd()
+				var stdout bytes.Buffer
+				root.SetOut(&stdout)
+				root.SetErr(&bytes.Buffer{})
+				root.SetArgs([]string{"test"})
+				if err := root.Execute(); err != nil {
+					t.Fatalf("root.Execute(test) error = %v", err)
+				}
+				if !strings.Contains(stdout.String(), "Run behavioral test scenarios") {
+					t.Fatalf("test help output = %q, want command help", stdout.String())
+				}
+			},
+		},
+		{
+			name: "warning and emergency setting helpers cover quiet branches",
+			run: func(t *testing.T) {
+				t.Helper()
+				store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "settings.db"), 0, nil)
+				if err != nil {
+					t.Fatalf("NewSQLiteStore() error = %v", err)
+				}
+				t.Cleanup(func() {
+					_ = store.Close()
+				})
+
+				enabled, err := loadEmergencyStopSetting(context.Background(), store)
+				if err != nil {
+					t.Fatalf("loadEmergencyStopSetting(missing) error = %v", err)
+				}
+				if enabled {
+					t.Fatal("loadEmergencyStopSetting(missing) = true, want false")
+				}
+
+				var logOutput bytes.Buffer
+				logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+				warnIfContainerDataDirNotMounted(logger, filepath.Join(t.TempDir(), "missing-dockerenv"), filepath.Join(t.TempDir(), "missing-mountinfo"), "/data")
+				if logOutput.Len() != 0 {
+					t.Fatalf("warnIfContainerDataDirNotMounted() log = %q, want empty output", logOutput.String())
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.run(t)
 		})
 	}
 }

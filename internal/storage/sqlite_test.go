@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/OberWatch/oberwatch/internal/alert"
+	"github.com/OberWatch/oberwatch/internal/config"
 )
 
 func newStore(t *testing.T, retention time.Duration) *SQLiteStore {
@@ -131,6 +132,165 @@ func TestSQLiteStore_SaveAndQueryCosts(t *testing.T) {
 	}
 	if csvOutput == "" || csvOutput[:5] != "agent" {
 		t.Fatalf("csv output = %q, want csv header", csvOutput)
+	}
+}
+
+func TestSQLiteStore_AgentLifecycle(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 28, 14, 0, 0, 0, time.UTC)
+
+	seed := AgentRecord{
+		Name:                  "unknown",
+		Status:                "active",
+		BudgetLimitUSD:        15,
+		BudgetSpentUSD:        2.5,
+		BudgetPeriod:          config.BudgetPeriodDaily,
+		ActionOnExceed:        config.BudgetActionAlert,
+		DowngradeChain:        []string{"claude-sonnet-4-6", "claude-haiku-4-5"},
+		DowngradeThresholdPct: 80,
+		AlertThresholdsPct:    []float64{50, 80, 100},
+		PeriodStartedAt:       now,
+		PeriodResetsAt:        now.Add(24 * time.Hour),
+		FirstSeenAt:           now,
+		LastSeenAt:            now,
+	}
+
+	//nolint:govet // keep test case fields ordered for readability.
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, *SQLiteStore)
+		assert  func(*testing.T, *SQLiteStore)
+	}{
+		{
+			name: "upsert get and list agents",
+			prepare: func(t *testing.T, store *SQLiteStore) {
+				t.Helper()
+				if err := store.UpsertAgent(context.Background(), seed); err != nil {
+					t.Fatalf("UpsertAgent() error = %v", err)
+				}
+			},
+			assert: func(t *testing.T, store *SQLiteStore) {
+				t.Helper()
+				record, found, err := store.GetAgent(context.Background(), "unknown")
+				if err != nil {
+					t.Fatalf("GetAgent() error = %v", err)
+				}
+				if !found {
+					t.Fatal("GetAgent() found = false, want true")
+				}
+				if record.DowngradeThresholdPct != 80 {
+					t.Fatalf("DowngradeThresholdPct = %v, want 80", record.DowngradeThresholdPct)
+				}
+
+				records, err := store.ListAgents(context.Background())
+				if err != nil {
+					t.Fatalf("ListAgents() error = %v", err)
+				}
+				if len(records) != 1 {
+					t.Fatalf("len(ListAgents()) = %d, want 1", len(records))
+				}
+			},
+		},
+		{
+			name: "rename agent migrates cost records",
+			prepare: func(t *testing.T, store *SQLiteStore) {
+				t.Helper()
+				if err := store.UpsertAgent(context.Background(), seed); err != nil {
+					t.Fatalf("UpsertAgent() error = %v", err)
+				}
+				if err := store.SaveCostRecord(context.Background(), CostRecord{
+					ID:           "cost-1",
+					Agent:        "unknown",
+					Model:        "gpt-4o",
+					Provider:     "openai",
+					InputTokens:  10,
+					OutputTokens: 5,
+					CostUSD:      0.2,
+					CreatedAt:    now,
+				}); err != nil {
+					t.Fatalf("SaveCostRecord() error = %v", err)
+				}
+			},
+			assert: func(t *testing.T, store *SQLiteStore) {
+				t.Helper()
+				if err := store.RenameAgent(context.Background(), "unknown", "email-agent"); err != nil {
+					t.Fatalf("RenameAgent() error = %v", err)
+				}
+
+				if _, found, err := store.GetAgent(context.Background(), "unknown"); err != nil {
+					t.Fatalf("GetAgent(old) error = %v", err)
+				} else if found {
+					t.Fatal("old agent still exists after rename")
+				}
+
+				rows, err := store.QueryCosts(context.Background(), CostQuery{Agent: "email-agent", GroupBy: "agent"})
+				if err != nil {
+					t.Fatalf("QueryCosts(renamed) error = %v", err)
+				}
+				if len(rows) != 1 {
+					t.Fatalf("len(QueryCosts(renamed)) = %d, want 1", len(rows))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := newStore(t, 0)
+			tt.prepare(t, store)
+			tt.assert(t, store)
+		})
+	}
+}
+
+func TestSQLiteStore_AgentDefaultsAndRenameConflict(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+
+	if err := store.UpsertAgent(ctx, AgentRecord{Name: "agent-a"}); err != nil {
+		t.Fatalf("UpsertAgent(defaults) error = %v", err)
+	}
+	if err := store.UpsertAgent(ctx, AgentRecord{
+		Name:            "agent-b",
+		Status:          "active",
+		BudgetPeriod:    config.BudgetPeriodDaily,
+		ActionOnExceed:  config.BudgetActionAlert,
+		FirstSeenAt:     time.Now().UTC(),
+		LastSeenAt:      time.Now().UTC(),
+		PeriodStartedAt: time.Now().UTC(),
+		PeriodResetsAt:  time.Now().UTC().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertAgent(second seed) error = %v", err)
+	}
+
+	record, found, err := store.GetAgent(ctx, "agent-a")
+	if err != nil {
+		t.Fatalf("GetAgent(defaults) error = %v", err)
+	}
+	if !found {
+		t.Fatal("GetAgent(defaults) found = false, want true")
+	}
+	if record.Status != "active" {
+		t.Fatalf("Status = %q, want active", record.Status)
+	}
+	if record.BudgetPeriod != config.BudgetPeriodDaily {
+		t.Fatalf("BudgetPeriod = %q, want daily", record.BudgetPeriod)
+	}
+	if record.ActionOnExceed != config.BudgetActionAlert {
+		t.Fatalf("ActionOnExceed = %q, want alert", record.ActionOnExceed)
+	}
+	if record.DowngradeThresholdPct != 80 {
+		t.Fatalf("DowngradeThresholdPct = %v, want 80", record.DowngradeThresholdPct)
+	}
+
+	err = store.RenameAgent(ctx, "agent-a", "agent-b")
+	if err != ErrAgentExists {
+		t.Fatalf("RenameAgent(conflict) error = %v, want %v", err, ErrAgentExists)
 	}
 }
 
@@ -696,6 +856,22 @@ func (s storeFunc) SaveAlert(context.Context, alert.Alert) error {
 
 func (s storeFunc) QueryAlerts(context.Context, AlertQuery) ([]alert.Alert, error) {
 	return nil, nil
+}
+
+func (s storeFunc) UpsertAgent(context.Context, AgentRecord) error {
+	return nil
+}
+
+func (s storeFunc) GetAgent(context.Context, string) (AgentRecord, bool, error) {
+	return AgentRecord{}, false, nil
+}
+
+func (s storeFunc) ListAgents(context.Context) ([]AgentRecord, error) {
+	return nil, nil
+}
+
+func (s storeFunc) RenameAgent(context.Context, string, string) error {
+	return nil
 }
 
 func (s storeFunc) SaveBudgetSnapshot(context.Context, BudgetSnapshot) error {
