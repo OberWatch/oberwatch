@@ -149,8 +149,13 @@
   <div class="h-screen overflow-hidden bg-base text-text-primary">
     <aside class="fixed inset-y-0 left-0 z-20 flex w-56 flex-col border-r border-border-default bg-surface px-4 py-5">
       <div class="mb-8 border-b border-border-default pb-4">
-        <p class="text-lg font-semibold tracking-tight">Oberwatch</p>
-        <p class="text-xs text-text-secondary">{displayVersion}</p>
+        <div class="flex items-center gap-3">
+          <img src="/logo-white.svg" alt="Oberwatch logo" class="h-10 w-10 shrink-0" />
+          <div>
+            <p class="text-lg font-semibold tracking-tight">Oberwatch</p>
+            <p class="text-xs text-text-secondary">{displayVersion}</p>
+          </div>
+        </div>
       </div>
 
       <nav class="flex flex-1 flex-col gap-1">

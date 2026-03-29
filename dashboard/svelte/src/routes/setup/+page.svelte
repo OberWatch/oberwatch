@@ -35,57 +35,70 @@
 <div class="flex min-h-screen items-center justify-center bg-base px-6">
   <section class="w-full max-w-2xl rounded-3xl border border-border-default bg-surface p-8 shadow-2xl shadow-black/20">
     {#if step === 1}
-      <div class="space-y-2">
-        <p class="text-xs uppercase tracking-[0.3em] text-accent">First Run</p>
-        <h1 class="text-3xl font-semibold text-text-primary">Welcome to Oberwatch</h1>
-        <p class="text-sm text-text-secondary">Create the single admin account for this instance.</p>
+      <div class="space-y-4">
+        <img src="/logo-white.svg" alt="Oberwatch logo" class="h-16 w-16" />
+        <div class="space-y-2">
+          <p class="text-xs uppercase tracking-[0.3em] text-accent">First Run</p>
+          <h1 class="text-3xl font-semibold text-text-primary">Welcome to Oberwatch</h1>
+          <p class="text-sm text-text-secondary">Create the single admin account for this instance.</p>
+        </div>
       </div>
 
-      <div class="mt-6 grid gap-4 md:grid-cols-3">
-        <label class="space-y-1 md:col-span-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">Username</span>
-          <input
-            bind:value={username}
-            type="text"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
-          />
-        </label>
-        <label class="space-y-1 md:col-span-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">Password</span>
-          <input
-            bind:value={password}
-            type="password"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
-          />
-        </label>
-        <label class="space-y-1 md:col-span-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">Confirm password</span>
-          <input
-            bind:value={confirmPassword}
-            type="password"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
-          />
-        </label>
-      </div>
-
-      {#if errorMessage}
-        <p class="mt-4 text-sm text-danger">{errorMessage}</p>
-      {/if}
-
-      <button
-        type="button"
-        class="mt-6 rounded-md bg-accent px-5 py-2 text-sm font-medium text-white hover:bg-accent-hover"
-        onclick={createAccount}
+      <form
+        class="mt-6"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void createAccount();
+        }}
       >
-        Create Account
-      </button>
+        <div class="grid gap-4 md:grid-cols-3">
+          <label class="space-y-1 md:col-span-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">Username</span>
+            <input
+              bind:value={username}
+              type="text"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
+            />
+          </label>
+          <label class="space-y-1 md:col-span-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">Password</span>
+            <input
+              bind:value={password}
+              type="password"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
+            />
+          </label>
+          <label class="space-y-1 md:col-span-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">Confirm password</span>
+            <input
+              bind:value={confirmPassword}
+              type="password"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none"
+            />
+          </label>
+        </div>
+
+        {#if errorMessage}
+          <p class="mt-4 text-sm text-danger">{errorMessage}</p>
+        {/if}
+
+        <button
+          type="submit"
+          class="mt-6 rounded-md bg-accent px-5 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+        >
+          Create Account
+        </button>
+      </form>
     {:else}
-      <div class="space-y-2">
-        <p class="text-xs uppercase tracking-[0.3em] text-success">Setup Complete</p>
-        <h1 class="text-3xl font-semibold text-text-primary">You're ready!</h1>
-        <p class="text-sm text-text-secondary">
-          Point your agents at this URL instead of `api.openai.com`.
-        </p>
+      <div class="space-y-4">
+        <img src="/logo-white.svg" alt="Oberwatch logo" class="h-16 w-16" />
+        <div class="space-y-2">
+          <p class="text-xs uppercase tracking-[0.3em] text-success">Setup Complete</p>
+          <h1 class="text-3xl font-semibold text-text-primary">You're ready!</h1>
+          <p class="text-sm text-text-secondary">
+            Point your agents at this URL instead of `api.openai.com`.
+          </p>
+        </div>
       </div>
 
       <div class="mt-6 rounded-xl border border-border-default bg-elevated p-4">

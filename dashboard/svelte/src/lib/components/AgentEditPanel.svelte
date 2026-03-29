@@ -92,65 +92,73 @@
       </button>
     </div>
 
-    <div class="mt-6 space-y-4">
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Agent Name</span>
-        <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={name} />
-      </label>
+    <form
+      class="mt-6"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <div class="space-y-4">
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Agent Name</span>
+          <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={name} />
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Budget Limit (USD)</span>
-        <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={limitUSD} placeholder="0 = unlimited" type="number" min="0" step="0.01" />
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Budget Limit (USD)</span>
+          <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={limitUSD} placeholder="0 = unlimited" type="number" min="0" step="0.01" />
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Period</span>
-        <select class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={period}>
-          <option value="hourly">Hourly</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
-        </select>
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Period</span>
+          <select class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={period}>
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Action on Exceed</span>
-        <select class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={actionOnExceed}>
-          <option value="reject">Reject</option>
-          <option value="downgrade">Downgrade</option>
-          <option value="alert">Alert</option>
-          <option value="kill">Kill</option>
-        </select>
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Action on Exceed</span>
+          <select class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={actionOnExceed}>
+            <option value="reject">Reject</option>
+            <option value="downgrade">Downgrade</option>
+            <option value="alert">Alert</option>
+            <option value="kill">Kill</option>
+          </select>
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Downgrade Chain</span>
-        <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={downgradeChain} />
-        <p class="text-xs text-text-muted">Models to fall back to, in order, when budget threshold is reached.</p>
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Downgrade Chain</span>
+          <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={downgradeChain} />
+          <p class="text-xs text-text-muted">Models to fall back to, in order, when budget threshold is reached.</p>
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Downgrade Threshold (%)</span>
-        <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={downgradeThreshold} type="number" min="0" max="100" step="1" />
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Downgrade Threshold (%)</span>
+          <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={downgradeThreshold} type="number" min="0" max="100" step="1" />
+        </label>
 
-      <label class="block space-y-2">
-        <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Alert Thresholds (%)</span>
-        <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={alertThresholds} />
-      </label>
+        <label class="block space-y-2">
+          <span class="text-xs font-medium uppercase tracking-wide text-text-secondary">Alert Thresholds (%)</span>
+          <input class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary" bind:value={alertThresholds} />
+        </label>
 
-      {#if errorMessage}
-        <div class="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{errorMessage}</div>
-      {/if}
-    </div>
+        {#if errorMessage}
+          <div class="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{errorMessage}</div>
+        {/if}
+      </div>
 
-    <div class="mt-8 flex items-center justify-end gap-3">
-      <button type="button" class="rounded-md border border-border-default bg-elevated px-4 py-2 text-sm text-text-primary" disabled={busy} onclick={() => onClose?.()}>
-        Cancel
-      </button>
-      <button type="button" class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={busy} onclick={submit}>
-        Save
-      </button>
-    </div>
+      <div class="mt-8 flex items-center justify-end gap-3">
+        <button type="button" class="rounded-md border border-border-default bg-elevated px-4 py-2 text-sm text-text-primary" disabled={busy} onclick={() => onClose?.()}>
+          Cancel
+        </button>
+        <button type="submit" class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={busy}>
+          Save
+        </button>
+      </div>
+    </form>
   </aside>
 {/if}

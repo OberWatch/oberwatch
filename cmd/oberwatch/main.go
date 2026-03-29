@@ -543,13 +543,7 @@ func displayVersion() string {
 	if cleanVersion == "" {
 		cleanVersion = "v0.0.0"
 	}
-
-	cleanChannel := strings.TrimSpace(channel)
-	if cleanChannel == "" {
-		return cleanVersion
-	}
-
-	return fmt.Sprintf("%s (%s)", cleanVersion, cleanChannel)
+	return cleanVersion
 }
 
 func loadRuntimeConfig(cmd *cobra.Command, rootOpts *rootOptions) (config.Config, string, error) {

@@ -207,45 +207,52 @@
 
     <section class="rounded-lg border border-border-default bg-surface p-4">
       <h2 class="text-lg font-semibold text-text-primary">Change Password</h2>
-      <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <label class="space-y-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">Current password</span>
-          <input
-            bind:value={currentPassword}
-            type="password"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
-          />
-        </label>
-        <label class="space-y-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">New password</span>
-          <input
-            bind:value={newPassword}
-            type="password"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
-          />
-        </label>
-        <label class="space-y-1">
-          <span class="text-xs uppercase tracking-wide text-text-secondary">Confirm new password</span>
-          <input
-            bind:value={confirmPassword}
-            type="password"
-            class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
-          />
-        </label>
-      </div>
-      {#if passwordError}
-        <p class="mt-3 text-sm text-danger">{passwordError}</p>
-      {/if}
-      {#if passwordSuccess}
-        <p class="mt-3 text-sm text-success">{passwordSuccess}</p>
-      {/if}
-      <button
-        type="button"
-        class="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover"
-        onclick={changePassword}
+      <form
+        class="mt-3"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void changePassword();
+        }}
       >
-        Update Password
-      </button>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">Current password</span>
+            <input
+              bind:value={currentPassword}
+              type="password"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">New password</span>
+            <input
+              bind:value={newPassword}
+              type="password"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">Confirm new password</span>
+            <input
+              bind:value={confirmPassword}
+              type="password"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+        </div>
+        {#if passwordError}
+          <p class="mt-3 text-sm text-danger">{passwordError}</p>
+        {/if}
+        {#if passwordSuccess}
+          <p class="mt-3 text-sm text-success">{passwordSuccess}</p>
+        {/if}
+        <button
+          type="submit"
+          class="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+        >
+          Update Password
+        </button>
+      </form>
     </section>
   {/if}
 </section>
