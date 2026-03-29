@@ -1,6 +1,6 @@
 # Oberwatch AI Coding Rules
 
-## ALWAYS INCLUDE THIS FILE IN EVERY CODING SESSION
+## IF YOU ARE USING ANY CODING AGENT OR ASSISTANT, ALWAYS INCLUDE THIS FILE IN EVERY CODING SESSION.
 
 This file defines mandatory coding standards for any AI assistant working on the Oberwatch codebase. These rules are non-negotiable.
 
