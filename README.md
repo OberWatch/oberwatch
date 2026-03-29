@@ -68,39 +68,26 @@ Agent SDK / app
 
 ## Quick Start
 
-### Production image
-
-Use Docker Hub for stable releases.
+### One-line install (Linux/macOS)
 
 ```bash
-docker run --name oberwatch \
-  -p 8080:8080 \
-  -v oberwatch-data:/data \
-  oberwatch/oberwatch:latest
+curl -fsSL https://raw.githubusercontent.com/OberWatch/oberwatch/main/scripts/install.sh | sh
 ```
 
-Then open `http://localhost:8080` and complete first-run setup.
-
-Notes:
-- The container starts without a mounted TOML file.
-- If no config file is provided, Oberwatch uses built-in defaults plus environment overrides.
-- `/data` should be mounted in containers so SQLite state survives restarts.
-
-### Pin a specific release
-
-For production, prefer a versioned image instead of floating `latest`.
+Then open `http://localhost:8080` to complete setup.
+### Docker
 
 ```bash
-docker run -p 8080:8080 -v oberwatch-data:/data oberwatch/oberwatch:0.1.0
+docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
 ```
 
-### Docker Compose
+### Docker Compose (for Enterprise Edition)
 
 ```bash
+wget https://raw.githubusercontent.com/OberWatch/oberwatch/main/docker-compose.yml
+# Edit to uncomment enterprise services and add license key
 docker compose up -d
 ```
-
-The repository includes a development-friendly [docker-compose.yml](./docker-compose.yml) with config and data mounts.
 
 ### Build from source
 
@@ -123,6 +110,7 @@ make dev
 - the Go backend with `air` for automatic rebuild/restart
 - the Svelte dashboard dev server with hot reload
 - a proxy from `/_oberwatch/*` to `http://localhost:8080`
+
 
 ## First-Run Experience
 
@@ -204,7 +192,7 @@ It currently supports:
 - streaming usage accumulation for providers that emit final usage data
 - fallback estimation when providers omit usage entirely
 
-`http://localhost:8080.`Very small non-zero amounts are displayed with higher precision so sub-cent spend does not collapse to `$0.00`.
+Very small non-zero amounts are displayed with higher precision so sub-cent spend does not collapse to `$0.00`.
 
 ## Configuration
 
@@ -229,6 +217,14 @@ export OBERWATCH_SERVER__PORT=8080
 export OBERWATCH_GATE__ENABLED=true
 export OBERWATCH_TRACE__STORAGE=sqlite
 ```
+
+## Production Deployment
+
+If you expose Oberwatch on the public internet, put it behind a reverse proxy such as Caddy or Nginx and terminate TLS there.
+
+Warning: Never expose Oberwatch without TLS in production. API keys pass through the proxy in request headers.
+
+See [production.md](./docs/production.md) for the production deployment guide placeholder.
 
 ## Deployment and Release Channels
 
@@ -276,8 +272,6 @@ Project docs:
 - [SECURITY.md](./SECURITY.md)
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AI_CODING.md](./AI_CODING.md)
-- [CONTRIBUTING.md](./CONTRIBUTING.md)
-- [BRANCHING.md](./BRANCHING.md)
 - [CLAUDE.md](./CLAUDE.md)
 
 ## Contributing

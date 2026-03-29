@@ -1,0 +1,570 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_OWNER="OberWatch"
+REPO_NAME="oberwatch"
+API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+RAW_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main"
+INSTALL_PATH="/usr/local/bin/oberwatch"
+SERVICE_NAME="oberwatch"
+LINUX_SERVICE_USER="oberwatch"
+LINUX_SERVICE_HOME="/home/${LINUX_SERVICE_USER}"
+LINUX_STATE_DIR="${LINUX_SERVICE_HOME}/.oberwatch"
+HEALTH_URL="http://localhost:8080/_oberwatch/api/v1/health"
+
+print_banner() {
+  cat <<'BANNER'
+ ::::::::  :::::::::  :::::::::: :::::::::  :::       :::     ::: ::::::::::: ::::::::  :::    ::: 
+:+:    :+: :+:    :+: :+:        :+:    :+: :+:       :+:   :+: :+:   :+:    :+:    :+: :+:    :+: 
++:+    +:+ +:+    +:+ +:+        +:+    +:+ +:+       +:+  +:+   +:+  +:+    +:+        +:+    +:+ 
++#+    +:+ +#++:++#+  +#++:++#   +#++:++#:  +#+  +:+  +#+ +#++:++#++: +#+    +#+        +#++:++#++ 
++#+    +#+ +#+    +#+ +#+        +#+    +#+ +#+ +#+#+ +#+ +#+     +#+ +#+    +#+        +#+    +#+ 
+#+#    #+# #+#    #+# #+#        #+#    #+#  #+#+# #+#+#  #+#     #+# #+#    #+#    #+# #+#    #+# 
+ ########  #########  ########## ###    ###   ###   ###   ###     ### ###     ########  ###    ### 
+BANNER
+  printf '\n'
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+sudo_cmd() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    need_cmd sudo
+    sudo "$@"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local reply
+  printf '%s' "$prompt"
+  read -r reply || true
+  case "${reply}" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_user_home() {
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    if [ -d "/home/${SUDO_USER}" ]; then
+      printf '%s\n' "/home/${SUDO_USER}"
+      return
+    fi
+    if [ -d "/Users/${SUDO_USER}" ]; then
+      printf '%s\n' "/Users/${SUDO_USER}"
+      return
+    fi
+  fi
+  printf '%s\n' "${HOME}"
+}
+
+write_default_config() {
+  local target="$1"
+  cat >"${target}" <<'CONFIG'
+# =============================================================================
+# Oberwatch Example Configuration
+# =============================================================================
+# Copy this file to `oberwatch.toml` and adjust values for your environment.
+# Every option below includes a comment explaining what it controls.
+
+# -----------------------------------------------------------------------------
+# Server Settings
+# -----------------------------------------------------------------------------
+[server]
+# TCP port the Oberwatch HTTP server listens on.
+# Env: OBERWATCH_SERVER__PORT
+port = 8080
+
+# Bind address for incoming HTTP connections.
+# Use 127.0.0.1 for local-only access.
+# Env: OBERWATCH_SERVER__HOST
+host = "0.0.0.0"
+
+# Bearer token required for management API and dashboard endpoints.
+# Keep this secret in production.
+# Env: OBERWATCH_SERVER__ADMIN_TOKEN
+admin_token = "change-me-admin-token"
+
+# Enable or disable the embedded dashboard.
+# Env: OBERWATCH_SERVER__DASHBOARD
+dashboard = true
+
+# Structured log level.
+# Valid values: debug, info, warn, error
+# Env: OBERWATCH_SERVER__LOG_LEVEL
+log_level = "info"
+
+# Log output format.
+# Valid values: text, json
+# Env: OBERWATCH_SERVER__LOG_FORMAT
+log_format = "text"
+
+# Optional TLS certificate path for HTTPS mode.
+# Leave empty to run plain HTTP.
+# Env: OBERWATCH_SERVER__TLS_CERT
+tls_cert = ""
+
+# Optional TLS private key path for HTTPS mode.
+# Must be set together with tls_cert.
+# Env: OBERWATCH_SERVER__TLS_KEY
+tls_key = ""
+
+# -----------------------------------------------------------------------------
+# Upstream Provider Settings
+# -----------------------------------------------------------------------------
+[upstream]
+# Default provider used when path-based provider detection is ambiguous.
+# Valid values: openai, anthropic, ollama, custom
+# Env: OBERWATCH_UPSTREAM__DEFAULT_PROVIDER
+default_provider = "openai"
+
+# Upstream request timeout (Go duration string).
+# Env: OBERWATCH_UPSTREAM__TIMEOUT
+timeout = "120s"
+
+[upstream.openai]
+# Base URL for OpenAI-compatible endpoints.
+# Env: OBERWATCH_UPSTREAM__OPENAI__BASE_URL
+base_url = "https://api.openai.com"
+
+[upstream.anthropic]
+# Base URL for Anthropic API.
+# Env: OBERWATCH_UPSTREAM__ANTHROPIC__BASE_URL
+base_url = "https://api.anthropic.com"
+
+[upstream.ollama]
+# Base URL for local or remote Ollama server.
+# Env: OBERWATCH_UPSTREAM__OLLAMA__BASE_URL
+base_url = "http://localhost:11434"
+
+[upstream.custom]
+# Base URL for an additional OpenAI-compatible provider.
+# Leave empty when unused.
+# Env: OBERWATCH_UPSTREAM__CUSTOM__BASE_URL
+base_url = ""
+
+# -----------------------------------------------------------------------------
+# Gate (Budget / Cost Governor) Settings
+# -----------------------------------------------------------------------------
+[gate]
+# Enable budget enforcement and cost tracking.
+# Env: OBERWATCH_GATE__ENABLED
+enabled = true
+
+# Default model downgrade path when action_on_exceed is "downgrade".
+default_downgrade_chain = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+]
+
+# Spend percentage at which downgrade behavior begins.
+downgrade_threshold_pct = 80
+
+# Alert thresholds as percentages of budget used.
+alert_thresholds_pct = [50, 80, 100]
+
+[gate.global_budget]
+# Global shared budget across all agents.
+# Use 0 for "unlimited".
+limit_usd = 500
+
+# Reset period for global budget.
+# Valid values: hourly, daily, weekly, monthly
+period = "monthly"
+
+[gate.default_budget]
+# Default per-agent budget if no explicit [[gate.agents]] override exists.
+# Use 0 for "unlimited".
+limit_usd = 25
+
+# Reset period for the default per-agent budget.
+# Valid values: hourly, daily, weekly, monthly
+period = "daily"
+
+# Action when budget is exceeded.
+# Valid values: reject, downgrade, alert, kill
+action_on_exceed = "alert"
+
+[gate.runaway]
+# Enable high-frequency runaway request detection.
+enabled = true
+
+# Maximum requests allowed in the window before kill behavior triggers.
+max_requests = 100
+
+# Window size in seconds for runaway detection.
+window_seconds = 60
+
+[gate.identification]
+# Agent identity source.
+# Valid values: header, api_key, source_ip
+method = "header"
+
+# Explicit per-agent policies (two example agents configured).
+[[gate.agents]]
+# Stable agent name as seen in X-Oberwatch-Agent header or key mapping.
+name = "email-agent"
+
+# Agent-specific budget limit in USD for the chosen period.
+limit_usd = 10.00
+
+# Budget reset period for this agent.
+period = "daily"
+
+# Enforcement action for this agent.
+action_on_exceed = "downgrade"
+
+# Agent-specific downgrade chain override.
+downgrade_chain = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+[[gate.agents]]
+name = "finance-agent"
+limit_usd = 50.00
+period = "weekly"
+action_on_exceed = "reject"
+downgrade_chain = ["gpt-4.1", "gpt-4.1-mini"]
+
+# Optional API key prefix-to-agent mapping when identification.method = "api_key".
+# [[gate.api_key_map]]
+# api_key_prefix = "sk-proj-email"
+# agent = "email-agent"
+
+# -----------------------------------------------------------------------------
+# Alert Delivery Settings
+# -----------------------------------------------------------------------------
+[alerts]
+# Generic webhook URL for alert POSTs.
+webhook_url = ""
+
+# Slack incoming webhook URL for alert notifications.
+slack_webhook_url = ""
+
+[alerts.email]
+# Enable SMTP-based email alerting.
+enabled = false
+
+# SMTP server hostname.
+smtp_host = ""
+
+# SMTP server port.
+smtp_port = 587
+
+# SMTP username.
+smtp_user = ""
+
+# SMTP password or app-specific token.
+smtp_password = ""
+
+# Sender email address.
+from = ""
+
+# Recipient email addresses.
+to = []
+
+# -----------------------------------------------------------------------------
+# Trace Settings
+# -----------------------------------------------------------------------------
+[trace]
+# Enable trace capture and storage.
+enabled = true
+
+# Capture prompt/response payload content in traces.
+# Disable when handling sensitive data.
+capture_content = false
+
+# Max in-memory trace buffer size (used by memory storage mode).
+memory_buffer_size = 1000
+
+# Retention duration for persisted traces (Go duration string).
+retention = "168h"
+
+# Trace storage backend.
+# Valid values: memory, sqlite
+storage = "sqlite"
+
+# SQLite file path when storage = "sqlite".
+sqlite_path = "./oberwatch.db"
+
+# Mark active traces as timed out after this idle duration.
+trace_timeout = "30s"
+
+# -----------------------------------------------------------------------------
+# Behavioral Test Harness Settings
+# -----------------------------------------------------------------------------
+[test]
+# Directory containing YAML scenario files.
+scenarios_dir = "./scenarios"
+
+# Maximum number of concurrent test scenarios.
+concurrency = 4
+
+# Default timeout per scenario (Go duration string).
+timeout = "30s"
+CONFIG
+}
+
+detect_platform() {
+  local os arch uname_os uname_arch
+  uname_os="$(uname -s)"
+  uname_arch="$(uname -m)"
+
+  case "${uname_os}" in
+    Linux)
+      os="linux"
+      ;;
+    Darwin)
+      os="darwin"
+      ;;
+    *)
+      fail "unsupported operating system: ${uname_os}. Oberwatch installer currently supports Linux and macOS only."
+      ;;
+  esac
+
+  case "${uname_arch}" in
+    x86_64|amd64)
+      arch="amd64"
+      ;;
+    arm64|aarch64)
+      arch="arm64"
+      ;;
+    i386|i686|x86)
+      fail "unsupported architecture: ${uname_arch}. 32-bit platforms are not supported."
+      ;;
+    *)
+      fail "unsupported architecture: ${uname_arch}. Supported architectures are amd64 and arm64."
+      ;;
+  esac
+
+  RELEASE_OS="${os}"
+  RELEASE_ARCH="${arch}"
+}
+
+fetch_latest_tag() {
+  local response tag
+  response="$(curl -fsSL "${API_URL}")" || fail "failed to query GitHub Releases API at ${API_URL}"
+  tag="$(printf '%s\n' "${response}" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+  [ -n "${tag}" ] || fail "could not determine latest release tag from GitHub API"
+  LATEST_TAG="${tag}"
+}
+
+download_binary() {
+  local asset_name download_url target
+  asset_name="oberwatch-${RELEASE_OS}-${RELEASE_ARCH}"
+  download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${asset_name}"
+  target="${TMP_DIR}/${asset_name}"
+
+  log "Downloading ${asset_name} from ${LATEST_TAG}..."
+  curl -fsSL "${download_url}" -o "${target}" || fail "failed to download ${download_url}"
+  [ -s "${target}" ] || fail "downloaded binary is empty: ${target}"
+  chmod +x "${target}"
+  [ -x "${target}" ] || fail "downloaded binary is not executable: ${target}"
+
+  DOWNLOADED_BINARY="${target}"
+}
+
+install_binary() {
+  sudo_cmd install -m 0755 "${DOWNLOADED_BINARY}" "${INSTALL_PATH}"
+  if ! "${INSTALL_PATH}" version >/dev/null 2>&1; then
+    fail "installed binary verification failed: ${INSTALL_PATH} version"
+  fi
+}
+
+ensure_user_state_dirs() {
+  mkdir -p "${USER_STATE_DIR}/data"
+  if [ ! -f "${USER_CONFIG_PATH}" ]; then
+    write_default_config "${USER_CONFIG_PATH}"
+    log "Generated default config at ${USER_CONFIG_PATH}"
+  else
+    log "Existing config found, keeping it"
+  fi
+}
+
+setup_linux_service_user() {
+  if ! id -u "${LINUX_SERVICE_USER}" >/dev/null 2>&1; then
+    local nologin_shell
+    nologin_shell="$(command -v nologin || true)"
+    if [ -z "${nologin_shell}" ]; then
+      if [ -x /usr/sbin/nologin ]; then
+        nologin_shell="/usr/sbin/nologin"
+      elif [ -x /sbin/nologin ]; then
+        nologin_shell="/sbin/nologin"
+      else
+        nologin_shell="/bin/false"
+      fi
+    fi
+    sudo_cmd useradd --system --no-create-home --shell "${nologin_shell}" "${LINUX_SERVICE_USER}"
+  fi
+}
+
+sync_linux_service_state() {
+  sudo_cmd mkdir -p "${LINUX_STATE_DIR}/data"
+  sudo_cmd cp "${USER_CONFIG_PATH}" "${LINUX_STATE_DIR}/oberwatch.toml"
+  if [ -d "${USER_STATE_DIR}/data" ]; then
+    sudo_cmd sh -c "cp -R '${USER_STATE_DIR}/data/.' '${LINUX_STATE_DIR}/data/' 2>/dev/null || true"
+  fi
+  sudo_cmd chown -R "${LINUX_SERVICE_USER}:${LINUX_SERVICE_USER}" "${LINUX_SERVICE_HOME}" "${LINUX_STATE_DIR}"
+}
+
+write_systemd_service() {
+  local service_path
+  service_path="/etc/systemd/system/${SERVICE_NAME}.service"
+  sudo_cmd tee "${service_path}" >/dev/null <<SERVICE
+[Unit]
+Description=Oberwatch - AI Agent Proxy & Observability
+After=network.target
+
+[Service]
+Type=simple
+User=${LINUX_SERVICE_USER}
+Group=${LINUX_SERVICE_USER}
+ExecStart=${INSTALL_PATH} serve --config ${LINUX_STATE_DIR}/oberwatch.toml
+Restart=always
+RestartSec=5
+WorkingDirectory=${LINUX_STATE_DIR}
+Environment=OBERWATCH_DATA_DIR=${LINUX_STATE_DIR}/data
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+}
+
+start_linux_service() {
+  need_cmd systemctl
+  sudo_cmd systemctl daemon-reload
+  sudo_cmd systemctl enable "${SERVICE_NAME}"
+  if sudo_cmd systemctl is-active --quiet "${SERVICE_NAME}"; then
+    sudo_cmd systemctl restart "${SERVICE_NAME}"
+  else
+    sudo_cmd systemctl start "${SERVICE_NAME}"
+  fi
+}
+
+wait_for_health() {
+  local attempt
+  for attempt in $(seq 1 15); do
+    if curl -fsSL "${HEALTH_URL}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+print_success_linux() {
+  cat <<SUCCESS
+
+✓ Oberwatch is installed and running!
+
+→ Dashboard:  http://localhost:8080
+→ Proxy URL:  http://localhost:8080
+→ Config:     ${USER_CONFIG_PATH}
+→ Data:       ${USER_STATE_DIR}/data/
+→ Logs:       sudo journalctl -u ${SERVICE_NAME} -f
+
+Open the dashboard to complete setup.
+
+Quick start:
+  1. Open http://localhost:8080 in your browser
+  2. Create your admin account
+  3. Point your AI agents at http://localhost:8080 instead of api.openai.com
+
+Other install methods:
+  Docker:         docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
+  Docker Compose: wget https://raw.githubusercontent.com/OberWatch/oberwatch/main/docker-compose.yml
+  From source:    git clone https://github.com/OberWatch/oberwatch && cd oberwatch && make build
+SUCCESS
+}
+
+print_success_macos() {
+  cat <<SUCCESS
+
+✓ Oberwatch is installed!
+
+→ Binary:     ${INSTALL_PATH}
+→ Config:     ${USER_CONFIG_PATH}
+→ Data:       ${USER_STATE_DIR}/data/
+
+To start Oberwatch, run: oberwatch serve
+To run in background: nohup oberwatch serve &
+
+Open the dashboard to complete setup.
+
+Quick start:
+  1. Run oberwatch serve
+  2. Open http://localhost:8080 in your browser
+  3. Create your admin account
+  4. Point your AI agents at http://localhost:8080 instead of api.openai.com
+
+Other install methods:
+  Docker:         docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
+  Docker Compose: wget https://raw.githubusercontent.com/OberWatch/oberwatch/main/docker-compose.yml
+  From source:    git clone https://github.com/OberWatch/oberwatch && cd oberwatch && make build
+SUCCESS
+}
+
+main() {
+  need_cmd curl
+  need_cmd chmod
+  need_cmd install
+  need_cmd mktemp
+  need_cmd uname
+
+  print_banner
+  detect_platform
+
+  USER_HOME="$(resolve_user_home)"
+  USER_STATE_DIR="${USER_HOME}/.oberwatch"
+  USER_CONFIG_PATH="${USER_STATE_DIR}/oberwatch.toml"
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "${TMP_DIR}"' EXIT
+
+  if [ -x "${INSTALL_PATH}" ]; then
+    if prompt_yes_no "Oberwatch is already installed. Upgrade to latest? (y/N) "; then
+      log "Upgrading existing installation..."
+    else
+      exit 0
+    fi
+  fi
+
+  fetch_latest_tag
+  download_binary
+  install_binary
+  ensure_user_state_dirs
+
+  if [ "${RELEASE_OS}" = "linux" ]; then
+    setup_linux_service_user
+    sync_linux_service_state
+    write_systemd_service
+    start_linux_service
+
+    if wait_for_health; then
+      print_success_linux
+    else
+      log "Oberwatch failed to start. Check logs: sudo journalctl -u ${SERVICE_NAME} --no-pager -n 50"
+      exit 1
+    fi
+  else
+    print_success_macos
+  fi
+}
+
+main "$@"
