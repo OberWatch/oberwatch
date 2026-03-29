@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -575,7 +577,7 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 	}
 }
 
-func TestDisplayVersion_AppendsChannel(t *testing.T) {
+func TestDisplayVersion_IgnoresChannel(t *testing.T) {
 	originalVersion := version
 	originalChannel := channel
 	t.Cleanup(func() {
@@ -586,8 +588,24 @@ func TestDisplayVersion_AppendsChannel(t *testing.T) {
 	version = "v1.2.3"
 	channel = "beta"
 
-	if got := displayVersion(); got != "v1.2.3 (beta)" {
-		t.Fatalf("displayVersion() = %q, want %q", got, "v1.2.3 (beta)")
+	if got := displayVersion(); got != "v1.2.3" {
+		t.Fatalf("displayVersion() = %q, want %q", got, "v1.2.3")
+	}
+}
+
+func TestDisplayVersion_DefaultsWhenVersionEmpty(t *testing.T) {
+	originalVersion := version
+	originalChannel := channel
+	t.Cleanup(func() {
+		version = originalVersion
+		channel = originalChannel
+	})
+
+	version = "   "
+	channel = "staging"
+
+	if got := displayVersion(); got != "v0.0.0" {
+		t.Fatalf("displayVersion() = %q, want %q", got, "v0.0.0")
 	}
 }
 
@@ -733,6 +751,23 @@ func TestRunAndWriteStarterConfig(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "writeStarterConfig without force creates new file",
+			runTest: func(t *testing.T) {
+				t.Helper()
+				path := filepath.Join(t.TempDir(), "oberwatch.toml")
+				if err := writeStarterConfig(path, false); err != nil {
+					t.Fatalf("writeStarterConfig(force=false) error = %v", err)
+				}
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("ReadFile() error = %v", err)
+				}
+				if !strings.Contains(string(content), "[server]") {
+					t.Fatalf("starter config missing [server] section: %q", string(content))
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -740,6 +775,98 @@ func TestRunAndWriteStarterConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.runTest(t)
 		})
+	}
+}
+
+func TestMainEntryPoint_VersionCommand(t *testing.T) {
+	originalArgs := os.Args
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	t.Cleanup(func() {
+		os.Args = originalArgs
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	})
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(stdout) error = %v", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(stderr) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
+	})
+
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	os.Args = []string{"oberwatch", "version"}
+
+	main()
+
+	if closeErr := stdoutWriter.Close(); closeErr != nil {
+		t.Fatalf("stdoutWriter.Close() error = %v", closeErr)
+	}
+	if closeErr := stderrWriter.Close(); closeErr != nil {
+		t.Fatalf("stderrWriter.Close() error = %v", closeErr)
+	}
+
+	stdoutBytes, err := io.ReadAll(stdoutReader)
+	if err != nil {
+		t.Fatalf("ReadAll(stdout) error = %v", err)
+	}
+	stderrBytes, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatalf("ReadAll(stderr) error = %v", err)
+	}
+
+	if !strings.Contains(string(stdoutBytes), "oberwatch "+displayVersion()) {
+		t.Fatalf("stdout = %q, want version output", string(stdoutBytes))
+	}
+	if len(stderrBytes) != 0 {
+		t.Fatalf("stderr = %q, want empty stderr", string(stderrBytes))
+	}
+}
+
+func TestMainEntryPoint_ExitOnError(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainEntryPoint_ErrorHelper")
+	cmd.Env = append(os.Environ(), "OW_MAIN_ERROR_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("CombinedOutput() error = nil, want non-nil exit")
+	}
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("error type = %T, want *exec.ExitError", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("exit code = %d, want 1", exitErr.ExitCode())
+	}
+	if !strings.Contains(string(output), "error: --log-level must be one of") {
+		t.Fatalf("output = %q, want validation error", string(output))
+	}
+}
+
+func TestMainEntryPoint_ErrorHelper(t *testing.T) {
+	if os.Getenv("OW_MAIN_ERROR_HELPER") != "1" {
+		return
+	}
+
+	os.Args = []string{"oberwatch", "--log-level", "bad-level", "version"}
+	main()
+}
+
+func TestParsePositiveDuration_InvalidDuration(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parsePositiveDuration("not-a-duration", "timeout"); err == nil {
+		t.Fatal("parsePositiveDuration(invalid) error = nil, want non-nil")
 	}
 }
 
