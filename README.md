@@ -78,7 +78,7 @@ Then open `http://localhost:8080` to complete setup.
 ### Docker
 
 ```bash
-docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
+docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:beta
 ```
 
 ### Docker Compose (for Enterprise Edition)
