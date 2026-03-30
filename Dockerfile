@@ -14,6 +14,8 @@ RUN cd dashboard/svelte && npm ci && npm run build
 
 # Build Go binary
 COPY . .
+RUN cp -R dashboard/svelte/build/. internal/dashboard/static/ && \
+    cp -R dashboard/svelte/static/. internal/dashboard/static/
 RUN CGO_ENABLED=1 go build -ldflags="-s -w -X main.channel=${CHANNEL} -X main.commit=${COMMIT}" -o oberwatch ./cmd/oberwatch
 
 # Runtime stage
