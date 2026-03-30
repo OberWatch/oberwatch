@@ -61,6 +61,7 @@ type UpstreamConfig struct {
 	DefaultProvider ProviderConfigName `toml:"default_provider"`
 	OpenAI          ProviderEndpoint   `toml:"openai"`
 	Anthropic       ProviderEndpoint   `toml:"anthropic"`
+	Google          ProviderEndpoint   `toml:"google"`
 	Ollama          ProviderEndpoint   `toml:"ollama"`
 	Custom          ProviderEndpoint   `toml:"custom"`
 	Timeout         string             `toml:"timeout"`
@@ -244,6 +245,7 @@ func DefaultConfig() Config {
 			DefaultProvider: ProviderOpenAI,
 			OpenAI:          ProviderEndpoint{BaseURL: "https://api.openai.com"},
 			Anthropic:       ProviderEndpoint{BaseURL: "https://api.anthropic.com"},
+			Google:          ProviderEndpoint{BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai"},
 			Ollama:          ProviderEndpoint{BaseURL: "http://localhost:11434"},
 			Custom:          ProviderEndpoint{},
 			Timeout:         "120s",

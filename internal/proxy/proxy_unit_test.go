@@ -18,44 +18,44 @@ import (
 	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
-func TestDetectProvider_TableDriven(t *testing.T) {
+func TestDetectProviderForModel_TableDriven(t *testing.T) {
 	t.Parallel()
 
+	//nolint:govet // keep test table fields grouped for readability.
 	tests := []struct {
-		name            string
-		path            string
-		defaultProvider config.ProviderConfigName
-		want            config.ProviderConfigName
+		name  string
+		model string
+		want  config.ProviderConfigName
+		ok    bool
 	}{
 		{
-			name:            "chat completions routes to openai",
-			path:            "/v1/chat/completions",
-			defaultProvider: config.ProviderAnthropic,
-			want:            config.ProviderOpenAI,
+			name:  "gpt routes to openai",
+			model: "gpt-4o-mini",
+			want:  config.ProviderOpenAI,
+			ok:    true,
 		},
 		{
-			name:            "completions routes to openai",
-			path:            "/v1/completions",
-			defaultProvider: config.ProviderAnthropic,
-			want:            config.ProviderOpenAI,
+			name:  "gemini routes to google",
+			model: "gemini-2.5-flash",
+			want:  config.ProviderGoogle,
+			ok:    true,
 		},
 		{
-			name:            "messages routes to anthropic",
-			path:            "/v1/messages",
-			defaultProvider: config.ProviderOpenAI,
-			want:            config.ProviderAnthropic,
+			name:  "claude routes to anthropic",
+			model: "claude-haiku-4-5",
+			want:  config.ProviderAnthropic,
+			ok:    true,
 		},
 		{
-			name:            "unknown path uses default",
-			path:            "/v1/models",
-			defaultProvider: config.ProviderCustom,
-			want:            config.ProviderCustom,
+			name:  "llama routes to ollama",
+			model: "llama3.1:8b",
+			want:  config.ProviderOllama,
+			ok:    true,
 		},
 		{
-			name:            "trailing slash normalized",
-			path:            "/v1/chat/completions/",
-			defaultProvider: config.ProviderAnthropic,
-			want:            config.ProviderOpenAI,
+			name:  "unknown model is rejected",
+			model: "mystery-provider-model",
+			ok:    false,
 		},
 	}
 
@@ -64,9 +64,226 @@ func TestDetectProvider_TableDriven(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := detectProvider(tt.path, tt.defaultProvider)
+			got, ok := detectProviderForModel(tt.model)
+			if ok != tt.ok {
+				t.Fatalf("detectProviderForModel(%q) ok = %v, want %v", tt.model, ok, tt.ok)
+			}
 			if got != tt.want {
-				t.Fatalf("detectProvider(%q, %q) = %q, want %q", tt.path, tt.defaultProvider, got, tt.want)
+				t.Fatalf("detectProviderForModel(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveProvider_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table fields grouped for readability.
+	tests := []struct {
+		name        string
+		path        string
+		requestBody string
+		header      string
+		want        resolvedRoute
+		wantErrSub  string
+	}{
+		{
+			name:        "messages uses anthropic",
+			path:        "/v1/messages",
+			requestBody: `{"model":"claude-haiku-4-5"}`,
+			want:        resolvedRoute{provider: config.ProviderAnthropic},
+		},
+		{
+			name:        "openai-compatible gemini uses google",
+			path:        "/v1/chat/completions",
+			requestBody: `{"model":"gemini-2.5-flash"}`,
+			want:        resolvedRoute{provider: config.ProviderGoogle},
+		},
+		{
+			name:        "claude chat uses anthropic compatibility",
+			path:        "/v1/chat/completions",
+			requestBody: `{"model":"claude-haiku-4-5"}`,
+			want:        resolvedRoute{provider: config.ProviderAnthropic, anthropicCompat: true},
+		},
+		{
+			name:       "models requires provider header",
+			path:       "/v1/models",
+			wantErrSub: providerOverrideHeader,
+		},
+		{
+			name:   "models accepts explicit provider header",
+			path:   "/v1/models",
+			header: string(config.ProviderOpenAI),
+			want:   resolvedRoute{provider: config.ProviderOpenAI},
+		},
+		{
+			name:        "unknown model fails",
+			path:        "/v1/chat/completions",
+			requestBody: `{"model":"mystery-provider-model"}`,
+			wantErrSub:  "could not resolve provider",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.requestBody))
+			if tt.header != "" {
+				req.Header.Set(providerOverrideHeader, tt.header)
+			}
+
+			got, err := resolveProvider(req, []byte(tt.requestBody), config.ProviderOpenAI)
+			if tt.wantErrSub != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("resolveProvider() error = %v, want substring %q", err, tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveProvider() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("resolveProvider() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatToAnthropic_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table fields grouped for readability.
+	tests := []struct {
+		name         string
+		requestBody  string
+		wantContains []string
+		wantModel    string
+		wantStream   bool
+		wantErrSub   string
+	}{
+		{
+			name:        "translates simple chat request",
+			requestBody: `{"model":"claude-haiku-4-5","messages":[{"role":"system","content":"be concise"},{"role":"user","content":"hello"}]}`,
+			wantContains: []string{
+				`"model":"claude-haiku-4-5"`,
+				`"system":"be concise"`,
+				`"role":"user"`,
+				`"content":"hello"`,
+				`"max_tokens":1024`,
+			},
+			wantModel:  "claude-haiku-4-5",
+			wantStream: false,
+		},
+		{
+			name:        "missing model fails",
+			requestBody: `{"messages":[{"role":"user","content":"hello"}]}`,
+			wantErrSub:  "request model is required",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotBody, gotModel, gotStream, err := openAIChatToAnthropic([]byte(tt.requestBody))
+			if tt.wantErrSub != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("openAIChatToAnthropic() error = %v, want substring %q", err, tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("openAIChatToAnthropic() error = %v", err)
+			}
+			if gotModel != tt.wantModel {
+				t.Fatalf("model = %q, want %q", gotModel, tt.wantModel)
+			}
+			if gotStream != tt.wantStream {
+				t.Fatalf("stream = %v, want %v", gotStream, tt.wantStream)
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(string(gotBody), want) {
+					t.Fatalf("body = %q, want substring %q", string(gotBody), want)
+				}
+			}
+		})
+	}
+}
+
+func TestAnthropicToOpenAIChatCompletion_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		responseBody string
+		wantContains []string
+	}{
+		{
+			name:         "translates anthropic response",
+			responseBody: `{"id":"msg_123","model":"claude-haiku-4-5","content":[{"type":"text","text":"hello back"}],"usage":{"input_tokens":18,"output_tokens":10},"stop_reason":"end_turn"}`,
+			wantContains: []string{`"object":"chat.completion"`, `"model":"claude-haiku-4-5"`, `"content":"hello back"`, `"prompt_tokens":18`, `"completion_tokens":10`},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := anthropicToOpenAIChatCompletion([]byte(tt.responseBody), "claude-haiku-4-5")
+			if err != nil {
+				t.Fatalf("anthropicToOpenAIChatCompletion() error = %v", err)
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(string(got), want) {
+					t.Fatalf("body = %q, want substring %q", string(got), want)
+				}
+			}
+		})
+	}
+}
+
+func TestProviderRoutingHelpers_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table fields grouped for readability.
+	tests := []struct {
+		name     string
+		header   string
+		want     config.ProviderConfigName
+		ok       bool
+		rawPath  string
+		wantOpen bool
+	}{
+		{name: "provider override parses google", header: "google", want: config.ProviderGoogle, ok: true},
+		{name: "provider override rejects unknown", header: "grok", ok: false},
+		{name: "openai-compatible chat path is recognized", rawPath: "/v1/chat/completions", wantOpen: true},
+		{name: "native ollama path is not openai-compatible", rawPath: "/api/chat", wantOpen: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.header != "" {
+				req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+				req.Header.Set(providerOverrideHeader, tt.header)
+				got, ok := parseProviderOverride(req)
+				if ok != tt.ok {
+					t.Fatalf("parseProviderOverride() ok = %v, want %v", ok, tt.ok)
+				}
+				if got != tt.want {
+					t.Fatalf("parseProviderOverride() = %q, want %q", got, tt.want)
+				}
+			}
+			if tt.rawPath != "" {
+				if got := isOpenAICompatiblePath(tt.rawPath); got != tt.wantOpen {
+					t.Fatalf("isOpenAICompatiblePath(%q) = %v, want %v", tt.rawPath, got, tt.wantOpen)
+				}
 			}
 		})
 	}
