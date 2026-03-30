@@ -3,7 +3,8 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { fetchJSON } from '$lib/api';
-  import type { AuthStatusResponse } from '$lib/types';
+  import { connectStream } from '$lib/sse';
+  import type { AuthStatusResponse, BudgetAlertEvent, HealthResponse } from '$lib/types';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -31,6 +32,11 @@
   let authLoading = $state(true);
   let authStatus = $state<AuthStatusResponse | null>(null);
   let logoutError = $state<string | null>(null);
+  let displayVersion = $state('v0.1.0');
+  let emergencyStop = $state(false);
+  let emergencyBusy = $state(false);
+  let alertToasts = $state<{ id: number; agent: string; threshold: number }[]>([]);
+  let nextToastID = 1;
 
   function isActive(pathname: string, href: string): boolean {
     if (href === '/') {
@@ -44,6 +50,16 @@
       authStatus = await fetchJSON<AuthStatusResponse>('/auth/status');
     } finally {
       authLoading = false;
+    }
+  }
+
+  async function loadHealthVersion(): Promise<void> {
+    try {
+      const health = await fetchJSON<HealthResponse>('/health');
+      displayVersion = health.version;
+      emergencyStop = health.emergency_stop ?? false;
+    } catch {
+      // Keep the default sidebar version if health is temporarily unavailable.
     }
   }
 
@@ -80,9 +96,44 @@
     }
   }
 
-  onMount(async () => {
-    await loadAuthStatus();
-    await syncRoute();
+  async function resumeOperations(): Promise<void> {
+    emergencyBusy = true;
+    try {
+      await fetchJSON('/resume', { method: 'POST' });
+      await loadHealthVersion();
+    } finally {
+      emergencyBusy = false;
+    }
+  }
+
+  function showBudgetAlertToast(event: BudgetAlertEvent): void {
+    const threshold = Math.round(event.threshold_pct ?? 0);
+    const id = nextToastID++;
+    alertToasts = [...alertToasts, { id, agent: event.agent || 'unknown', threshold }];
+
+    window.setTimeout(() => {
+      alertToasts = alertToasts.filter((toast) => toast.id !== id);
+    }, 5000);
+  }
+
+  onMount(() => {
+    void (async () => {
+      await Promise.all([loadAuthStatus(), loadHealthVersion()]);
+      await syncRoute();
+    })();
+
+    const stream = connectStream((eventName, data) => {
+      if (eventName === 'budget_alert') {
+        showBudgetAlertToast(data as BudgetAlertEvent);
+      }
+      if (eventName === 'emergency_stop') {
+        void loadHealthVersion();
+      }
+    });
+
+    return () => {
+      stream.close();
+    };
   });
 
   $effect(() => {
@@ -98,8 +149,13 @@
   <div class="h-screen overflow-hidden bg-base text-text-primary">
     <aside class="fixed inset-y-0 left-0 z-20 flex w-56 flex-col border-r border-border-default bg-surface px-4 py-5">
       <div class="mb-8 border-b border-border-default pb-4">
-        <p class="text-lg font-semibold tracking-tight">Oberwatch</p>
-        <p class="text-xs text-text-secondary">v0.1.0</p>
+        <div class="flex items-center gap-3">
+          <img src="/logo-white.svg" alt="Oberwatch logo" class="h-10 w-10 shrink-0" />
+          <div>
+            <p class="text-lg font-semibold tracking-tight">Oberwatch</p>
+            <p class="text-xs text-text-secondary">{displayVersion}</p>
+          </div>
+        </div>
       </div>
 
       <nav class="flex flex-1 flex-col gap-1">
@@ -135,11 +191,36 @@
         {#if logoutError}
           <p class="mt-2 text-xs text-danger">{logoutError}</p>
         {/if}
-        <div class="mt-3 text-xs text-text-secondary">v0.1.0</div>
+        <div class="mt-3 text-xs text-text-secondary">{displayVersion}</div>
       </div>
     </aside>
 
     <main class="ml-56 h-screen overflow-y-auto p-6">
+      {#if alertToasts.length > 0}
+        <div class="pointer-events-none fixed right-6 top-6 z-50 flex w-full max-w-sm flex-col gap-3">
+          {#each alertToasts as toast (toast.id)}
+            <div class="rounded-lg border border-warning/40 bg-surface/95 px-4 py-3 shadow-2xl backdrop-blur">
+              <p class="text-sm font-semibold text-warning">Budget Threshold Reached</p>
+              <p class="mt-1 text-sm text-text-primary">
+                Agent <span class="font-medium">{toast.agent}</span> crossed {toast.threshold}% of its budget.
+              </p>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if emergencyStop}
+        <div class="mb-4 flex items-center justify-between gap-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+          <p class="text-sm font-medium text-warning">Emergency Stop Active — All agent requests are paused.</p>
+          <button
+            type="button"
+            class="rounded-md bg-success px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+            disabled={emergencyBusy}
+            onclick={resumeOperations}
+          >
+            Resume Operations
+          </button>
+        </div>
+      {/if}
       {@render children()}
     </main>
   </div>

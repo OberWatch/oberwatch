@@ -2,13 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
 func TestNewRootCmd_RegistersCommands(t *testing.T) {
@@ -197,6 +203,45 @@ func TestServeAndGate_BannerReflectsFlags(t *testing.T) {
 	}
 }
 
+func TestServe_UsesDefaultsWhenNoConfigFileExists(t *testing.T) {
+	t.Setenv("OW_TEST_MODE", "1")
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	workDir := t.TempDir()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"serve"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"Proxy:     http://0.0.0.0:8080",
+		"Dashboard: http://0.0.0.0:8080",
+		"Config:    (defaults/env only)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+}
+
 func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 	tests := []struct {
 		args       string
@@ -248,6 +293,249 @@ func TestTraceAndTestRun_FlagParsing(t *testing.T) {
 	}
 }
 
+func TestPathIsMountPointAndEmergencyStopSetting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		mountInfo         string
+		settingValue      string
+		wantMounted       bool
+		wantEmergencyStop bool
+	}{
+		{
+			name:              "mounted data path and true emergency flag",
+			mountInfo:         "36 25 0:32 / /data rw - overlay overlay rw\n",
+			settingValue:      "true",
+			wantMounted:       true,
+			wantEmergencyStop: true,
+		},
+		{
+			name:              "missing mount and false emergency flag",
+			mountInfo:         "36 25 0:32 / /tmp rw - overlay overlay rw\n",
+			settingValue:      "false",
+			wantMounted:       false,
+			wantEmergencyStop: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mountInfoPath := filepath.Join(t.TempDir(), "mountinfo")
+			if err := os.WriteFile(mountInfoPath, []byte(tt.mountInfo), 0o644); err != nil {
+				t.Fatalf("WriteFile(mountinfo) error = %v", err)
+			}
+
+			mounted, err := pathIsMountPoint(mountInfoPath, "/data")
+			if err != nil {
+				t.Fatalf("pathIsMountPoint() error = %v", err)
+			}
+			if mounted != tt.wantMounted {
+				t.Fatalf("pathIsMountPoint() = %v, want %v", mounted, tt.wantMounted)
+			}
+
+			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "settings.db"), 0, nil)
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+			if setErr := store.SetSetting(context.Background(), "emergency_stop", tt.settingValue); setErr != nil {
+				t.Fatalf("SetSetting(emergency_stop) error = %v", setErr)
+			}
+
+			enabled, err := loadEmergencyStopSetting(context.Background(), store)
+			if err != nil {
+				t.Fatalf("loadEmergencyStopSetting() error = %v", err)
+			}
+			if enabled != tt.wantEmergencyStop {
+				t.Fatalf("loadEmergencyStopSetting() = %v, want %v", enabled, tt.wantEmergencyStop)
+			}
+		})
+	}
+}
+
+func TestWarnIfContainerDataDirNotMounted_LogsWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dockerEnvPath := filepath.Join(dir, ".dockerenv")
+	mountInfoPath := filepath.Join(dir, "mountinfo")
+
+	if err := os.WriteFile(dockerEnvPath, []byte("container"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dockerenv) error = %v", err)
+	}
+	if err := os.WriteFile(mountInfoPath, []byte("36 25 0:32 / /tmp rw - overlay overlay rw\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(mountinfo) error = %v", err)
+	}
+
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	warnIfContainerDataDirNotMounted(logger, dockerEnvPath, mountInfoPath, "/data")
+
+	if !strings.Contains(logOutput.String(), "data directory is not a mounted volume") {
+		t.Fatalf("log output = %q, want mount warning", logOutput.String())
+	}
+}
+
+func TestAlertDispatchFunc_Dispatches(t *testing.T) {
+	t.Parallel()
+
+	var called bool
+	dispatcher := alertDispatchFunc(func(_ context.Context, _ alert.Alert) {
+		called = true
+	})
+	dispatcher.Dispatch(context.Background(), alert.Alert{})
+	if !called {
+		t.Fatal("Dispatch() did not invoke wrapped function")
+	}
+}
+
+func TestMainHelpers(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep helper test case fields ordered for readability.
+	tests := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{
+			name: "validate helpers cover success and failure paths",
+			run: func(t *testing.T) {
+				t.Helper()
+				if err := validateGlobalFlags("info", "text"); err != nil {
+					t.Fatalf("validateGlobalFlags(valid) error = %v", err)
+				}
+				if err := validateGlobalFlags("bad", "text"); err == nil {
+					t.Fatal("validateGlobalFlags(invalid level) error = nil, want non-nil")
+				}
+				if err := validateGlobalFlags("info", "bad"); err == nil {
+					t.Fatal("validateGlobalFlags(invalid format) error = nil, want non-nil")
+				}
+				if err := validatePort(8080, "port"); err != nil {
+					t.Fatalf("validatePort(valid) error = %v", err)
+				}
+				if err := validatePort(70000, "port"); err == nil {
+					t.Fatal("validatePort(invalid) error = nil, want non-nil")
+				}
+				if _, err := parsePositiveDuration("15s", "timeout"); err != nil {
+					t.Fatalf("parsePositiveDuration(valid) error = %v", err)
+				}
+				if _, err := parsePositiveDuration("0s", "timeout"); err == nil {
+					t.Fatal("parsePositiveDuration(zero) error = nil, want non-nil")
+				}
+			},
+		},
+		{
+			name: "file helpers cover missing path branch",
+			run: func(t *testing.T) {
+				t.Helper()
+				existingPath := filepath.Join(t.TempDir(), "exists")
+				if err := os.WriteFile(existingPath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("WriteFile(existing) error = %v", err)
+				}
+				exists, err := fileExists(existingPath)
+				if err != nil {
+					t.Fatalf("fileExists(existing) error = %v", err)
+				}
+				if !exists {
+					t.Fatal("fileExists(existing) = false, want true")
+				}
+
+				missingPath := filepath.Join(t.TempDir(), "missing")
+				exists, err = fileExists(missingPath)
+				if err != nil {
+					t.Fatalf("fileExists(missing) error = %v", err)
+				}
+				if exists {
+					t.Fatal("fileExists(missing) = true, want false")
+				}
+			},
+		},
+		{
+			name: "logger and runtime config branches execute",
+			run: func(t *testing.T) {
+				t.Helper()
+				logger := newLogger(config.LogLevelDebug, config.LogFormatJSON, &bytes.Buffer{})
+				logger.Debug("debug message")
+				textLogger := newLogger(config.LogLevelWarn, config.LogFormatText, &bytes.Buffer{})
+				textLogger.Warn("warn message")
+
+				cfgPath := writeValidConfig(t)
+				rootOpts := &rootOptions{configPath: cfgPath, logLevel: "debug", logFormat: "json"}
+				cmd := newRootCmd()
+				cmd.SetArgs([]string{"serve", "--log-level", "debug", "--log-format", "json"})
+				serveCmd, _, err := cmd.Find([]string{"serve"})
+				if err != nil {
+					t.Fatalf("Find(serve) error = %v", err)
+				}
+				if parseErr := serveCmd.ParseFlags([]string{"--log-level", "debug", "--log-format", "json"}); parseErr != nil {
+					t.Fatalf("ParseFlags() error = %v", parseErr)
+				}
+				cfg, _, err := loadRuntimeConfig(serveCmd, rootOpts)
+				if err != nil {
+					t.Fatalf("loadRuntimeConfig() error = %v", err)
+				}
+				if cfg.Server.LogLevel != config.LogLevelDebug || cfg.Server.LogFormat != config.LogFormatJSON {
+					t.Fatalf("loadRuntimeConfig() log overrides = %q/%q, want debug/json", cfg.Server.LogLevel, cfg.Server.LogFormat)
+				}
+
+				root := newRootCmd()
+				var stdout bytes.Buffer
+				root.SetOut(&stdout)
+				root.SetErr(&bytes.Buffer{})
+				root.SetArgs([]string{"test"})
+				if err := root.Execute(); err != nil {
+					t.Fatalf("root.Execute(test) error = %v", err)
+				}
+				if !strings.Contains(stdout.String(), "Run behavioral test scenarios") {
+					t.Fatalf("test help output = %q, want command help", stdout.String())
+				}
+			},
+		},
+		{
+			name: "warning and emergency setting helpers cover quiet branches",
+			run: func(t *testing.T) {
+				t.Helper()
+				store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "settings.db"), 0, nil)
+				if err != nil {
+					t.Fatalf("NewSQLiteStore() error = %v", err)
+				}
+				t.Cleanup(func() {
+					_ = store.Close()
+				})
+
+				enabled, err := loadEmergencyStopSetting(context.Background(), store)
+				if err != nil {
+					t.Fatalf("loadEmergencyStopSetting(missing) error = %v", err)
+				}
+				if enabled {
+					t.Fatal("loadEmergencyStopSetting(missing) = true, want false")
+				}
+
+				var logOutput bytes.Buffer
+				logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+				warnIfContainerDataDirNotMounted(logger, filepath.Join(t.TempDir(), "missing-dockerenv"), filepath.Join(t.TempDir(), "missing-mountinfo"), "/data")
+				if logOutput.Len() != 0 {
+					t.Fatalf("warnIfContainerDataDirNotMounted() log = %q, want empty output", logOutput.String())
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.run(t)
+		})
+	}
+}
+
 func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 	t.Parallel()
 
@@ -276,7 +564,7 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 				t.Fatalf("Execute() error = %v", err)
 			}
 			out := stdout.String()
-			want := "oberwatch " + version
+			want := "oberwatch " + displayVersion()
 			if !strings.Contains(out, want) {
 				t.Fatalf("stdout = %q, want substring %q", out, want)
 			}
@@ -286,6 +574,38 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDisplayVersion_IgnoresChannel(t *testing.T) {
+	originalVersion := version
+	originalChannel := channel
+	t.Cleanup(func() {
+		version = originalVersion
+		channel = originalChannel
+	})
+
+	version = "v1.2.3"
+	channel = "beta"
+
+	if got := displayVersion(); got != "v1.2.3" {
+		t.Fatalf("displayVersion() = %q, want %q", got, "v1.2.3")
+	}
+}
+
+func TestDisplayVersion_DefaultsWhenVersionEmpty(t *testing.T) {
+	originalVersion := version
+	originalChannel := channel
+	t.Cleanup(func() {
+		version = originalVersion
+		channel = originalChannel
+	})
+
+	version = "   "
+	channel = "staging"
+
+	if got := displayVersion(); got != "v0.0.0" {
+		t.Fatalf("displayVersion() = %q, want %q", got, "v0.0.0")
 	}
 }
 
@@ -431,6 +751,23 @@ func TestRunAndWriteStarterConfig(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "writeStarterConfig without force creates new file",
+			runTest: func(t *testing.T) {
+				t.Helper()
+				path := filepath.Join(t.TempDir(), "oberwatch.toml")
+				if err := writeStarterConfig(path, false); err != nil {
+					t.Fatalf("writeStarterConfig(force=false) error = %v", err)
+				}
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("ReadFile() error = %v", err)
+				}
+				if !strings.Contains(string(content), "[server]") {
+					t.Fatalf("starter config missing [server] section: %q", string(content))
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -438,6 +775,98 @@ func TestRunAndWriteStarterConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.runTest(t)
 		})
+	}
+}
+
+func TestMainEntryPoint_VersionCommand(t *testing.T) {
+	originalArgs := os.Args
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	t.Cleanup(func() {
+		os.Args = originalArgs
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+	})
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(stdout) error = %v", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(stderr) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
+	})
+
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	os.Args = []string{"oberwatch", "version"}
+
+	main()
+
+	if closeErr := stdoutWriter.Close(); closeErr != nil {
+		t.Fatalf("stdoutWriter.Close() error = %v", closeErr)
+	}
+	if closeErr := stderrWriter.Close(); closeErr != nil {
+		t.Fatalf("stderrWriter.Close() error = %v", closeErr)
+	}
+
+	stdoutBytes, err := io.ReadAll(stdoutReader)
+	if err != nil {
+		t.Fatalf("ReadAll(stdout) error = %v", err)
+	}
+	stderrBytes, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatalf("ReadAll(stderr) error = %v", err)
+	}
+
+	if !strings.Contains(string(stdoutBytes), "oberwatch "+displayVersion()) {
+		t.Fatalf("stdout = %q, want version output", string(stdoutBytes))
+	}
+	if len(stderrBytes) != 0 {
+		t.Fatalf("stderr = %q, want empty stderr", string(stderrBytes))
+	}
+}
+
+func TestMainEntryPoint_ExitOnError(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainEntryPoint_ErrorHelper")
+	cmd.Env = append(os.Environ(), "OW_MAIN_ERROR_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("CombinedOutput() error = nil, want non-nil exit")
+	}
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("error type = %T, want *exec.ExitError", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("exit code = %d, want 1", exitErr.ExitCode())
+	}
+	if !strings.Contains(string(output), "error: --log-level must be one of") {
+		t.Fatalf("output = %q, want validation error", string(output))
+	}
+}
+
+func TestMainEntryPoint_ErrorHelper(t *testing.T) {
+	if os.Getenv("OW_MAIN_ERROR_HELPER") != "1" {
+		return
+	}
+
+	os.Args = []string{"oberwatch", "--log-level", "bad-level", "version"}
+	main()
+}
+
+func TestParsePositiveDuration_InvalidDuration(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parsePositiveDuration("not-a-duration", "timeout"); err == nil {
+		t.Fatal("parsePositiveDuration(invalid) error = nil, want non-nil")
 	}
 }
 

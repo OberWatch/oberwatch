@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchJSON } from '$lib/api';
-  import { BudgetBar, DataTable, StatusBadge } from '$lib/components';
-  import type { Budget, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
+  import { formatUSD } from '$lib/currency';
+  import { AgentEditPanel, BudgetBar, DataTable, StatusBadge } from '$lib/components';
+  import type { Budget, BudgetUpdateRequest, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
 
   type BadgeStatus = 'active' | 'near_limit' | 'killed' | 'success' | 'error' | 'warning';
@@ -37,10 +38,18 @@
 
   let loading = $state(true);
   let errorMessage = $state<string | null>(null);
+  let successMessage = $state<string | null>(null);
   let search = $state('');
   let rows = $state<AgentRow[]>([]);
+  let agents = $state<Agent[]>([]);
+  let budgetsByAgent = $state<Record<string, Budget>>({});
   let actionBusyByAgent = $state<Record<string, boolean>>({});
   let proxyURL = $state('');
+  let selectedAgent = $state<Agent | null>(null);
+  let selectedBudget = $state<Budget | null>(null);
+  let editOpen = $state(false);
+  let editBusy = $state(false);
+  let editError = $state<string | null>(null);
 
   const filteredRows = $derived.by(() => {
     const term = search.trim().toLowerCase();
@@ -58,14 +67,6 @@
     lastSeenAt: lastSeenCell,
     actions: actionsCell
   }));
-
-  function formatUSD(value: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2
-    }).format(value);
-  }
 
   function relativeTime(timestamp?: string): string {
     if (!timestamp) {
@@ -102,12 +103,14 @@
         fetchJSON<BudgetsResponse>('/budgets')
       ]);
 
-      const budgetMap = new Map<string, Budget>(
+      agents = agentsRes.agents;
+      const budgetMap = Object.fromEntries(
         budgetsRes.budgets.map((budget: Budget) => [budget.agent, budget])
       );
+      budgetsByAgent = budgetMap;
 
       rows = agentsRes.agents.map((agent: Agent) => {
-        const budget = budgetMap.get(agent.name);
+        const budget = budgetMap[agent.name] as Budget | undefined;
         const spentUSD = budget?.spent_usd ?? agent.total_cost_usd;
         const limitUSD = budget?.limit_usd ?? 0;
         const usage = budget?.percentage_used ?? 0;
@@ -156,6 +159,49 @@
     }
   }
 
+  function openEditor(agentName: string): void {
+    const agent = agents.find((entry) => entry.name === agentName) ?? null;
+    const budget = budgetsByAgent[agentName] ?? null;
+    selectedAgent = agent;
+    selectedBudget = budget;
+    editError = null;
+    editOpen = true;
+  }
+
+  async function saveAgentEdit(payload: {
+    oldName: string;
+    newName: string;
+    budget: BudgetUpdateRequest;
+  }): Promise<void> {
+    editBusy = true;
+    editError = null;
+
+    try {
+      const nextName = payload.newName.trim();
+      if (nextName !== payload.oldName) {
+        await fetchJSON(`/agents/${encodeURIComponent(payload.oldName)}/rename`, {
+          method: 'PUT',
+          body: JSON.stringify({ new_name: nextName })
+        });
+      }
+
+      await fetchJSON(`/budgets/${encodeURIComponent(nextName)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload.budget)
+      });
+
+      successMessage = `Updated agent "${nextName}".`;
+      editOpen = false;
+      selectedAgent = null;
+      selectedBudget = null;
+      await loadAgents();
+    } catch (err) {
+      editError = err instanceof Error ? err.message : 'Failed to update agent.';
+    } finally {
+      editBusy = false;
+    }
+  }
+
   onMount(() => {
     proxyURL = window.location.origin;
     void loadAgents();
@@ -194,6 +240,13 @@
 {#snippet actionsCell(raw: RowData)}
   {@const row = raw as AgentRow}
   <div class="flex items-center gap-2">
+    <button
+      type="button"
+      class="rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary"
+      onclick={() => openEditor(row.name)}
+    >
+      Edit
+    </button>
     {#if row.isActive}
       <button
         type="button"
@@ -253,6 +306,12 @@
     </div>
   {/if}
 
+  {#if successMessage}
+    <div class="rounded-lg border border-success/40 bg-success/10 p-4">
+      <p class="text-sm text-success">{successMessage}</p>
+    </div>
+  {/if}
+
   {#if loading}
     <div class="overflow-hidden rounded-lg border border-border-default bg-surface">
       {#each Array.from({ length: 6 }) as _, index (index)}
@@ -261,9 +320,34 @@
     </div>
   {:else if filteredRows.length === 0}
     {#if rows.length === 0}
-      <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-secondary">
-        No agents detected yet. Point your AI agents at <span class="font-mono">{proxyURL}</span> to get
-        started.
+      <div class="space-y-4 rounded-lg border border-border-default bg-surface p-6">
+        <div class="space-y-1">
+          <h2 class="text-lg font-semibold text-text-primary">No agents detected yet</h2>
+          <p class="text-sm text-text-secondary">
+            Point your AI agents at Oberwatch to start tracking spend and controls.
+          </p>
+        </div>
+
+        <div class="overflow-hidden rounded-2xl border border-border-default bg-elevated">
+          <div class="flex items-center gap-3 border-b border-border-default px-4 py-3">
+            <div class="flex items-center gap-2">
+              <span class="h-3 w-3 rounded-full bg-danger"></span>
+              <span class="h-3 w-3 rounded-full bg-warning"></span>
+              <span class="h-3 w-3 rounded-full bg-success"></span>
+            </div>
+            <p class="font-mono text-sm text-text-secondary">point any agent at Oberwatch</p>
+          </div>
+
+          <pre class="overflow-x-auto px-4 py-5 font-mono text-sm leading-7 text-text-primary/85"><code><span class="text-text-secondary/85"># Just change the base URL and add a header</span>
+curl <span class="text-danger">{proxyURL}</span><span class="text-accent">/v1/chat/completions</span> \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Oberwatch-Agent: research-agent" \
+  -d '&#123;
+    "model": "gpt-4.1-mini",
+    "messages": [&#123;"role": "user", "content": "Hello"&#125;]
+  &#125;'</code></pre>
+        </div>
       </div>
     {:else}
       <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-muted">
@@ -274,3 +358,16 @@
     <DataTable {columns} rows={filteredRows} {onSort} {cellRenderers} />
   {/if}
 </section>
+
+<AgentEditPanel
+  open={editOpen}
+  agent={selectedAgent}
+  budget={selectedBudget}
+  busy={editBusy}
+  errorMessage={editError}
+  onClose={() => {
+    editOpen = false;
+    editError = null;
+  }}
+  onSave={saveAgentEdit}
+/>

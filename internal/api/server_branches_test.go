@@ -436,6 +436,22 @@ func (f failingStore) QueryAlerts(context.Context, storage.AlertQuery) ([]alert.
 	return nil, nil
 }
 
+func (f failingStore) UpsertAgent(context.Context, storage.AgentRecord) error {
+	return nil
+}
+
+func (f failingStore) GetAgent(context.Context, string) (storage.AgentRecord, bool, error) {
+	return storage.AgentRecord{}, false, nil
+}
+
+func (f failingStore) ListAgents(context.Context) ([]storage.AgentRecord, error) {
+	return nil, nil
+}
+
+func (f failingStore) RenameAgent(context.Context, string, string) error {
+	return nil
+}
+
 func (f failingStore) SaveBudgetSnapshot(context.Context, storage.BudgetSnapshot) error {
 	return nil
 }

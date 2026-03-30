@@ -55,3 +55,5 @@ dev:
 # Build the SvelteKit dashboard
 dashboard:
 	cd dashboard/svelte && npm run build
+	cp -R dashboard/svelte/build/. internal/dashboard/static/
+	cp -R dashboard/svelte/static/. internal/dashboard/static/

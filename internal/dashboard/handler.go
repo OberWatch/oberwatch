@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -28,6 +29,15 @@ func localBuildHandler() (http.Handler, bool) {
 	if _, err := os.Stat(localBuildDir); err != nil {
 		return nil, false
 	}
+
+	const localStaticDir = "dashboard/svelte/static"
+	if _, err := os.Stat(localStaticDir); err == nil {
+		return newSPAHandler(overlayFS{
+			primary:   os.DirFS(localBuildDir),
+			secondary: os.DirFS(localStaticDir),
+		}), true
+	}
+
 	return newSPAHandler(os.DirFS(localBuildDir)), true
 }
 
@@ -75,4 +85,21 @@ func assetExists(files fs.FS, relPath string) bool {
 func EmbeddedIndexExists() bool {
 	_, err := fs.ReadFile(staticFiles, "static/index.html")
 	return err == nil
+}
+
+type overlayFS struct {
+	primary   fs.FS
+	secondary fs.FS
+}
+
+// Open reads from the primary filesystem first, then falls back to secondary.
+func (o overlayFS) Open(name string) (fs.File, error) {
+	file, err := o.primary.Open(name)
+	if err == nil {
+		return file, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) || o.secondary == nil {
+		return nil, err
+	}
+	return o.secondary.Open(name)
 }

@@ -12,5 +12,36 @@ services:
       - OBERWATCH_SERVER__ADMIN_TOKEN=dev-token-change-me
       - OBERWATCH_SERVER__LOG_LEVEL=debug
 
+  # ---------------------------------------------------------------------------
+  # Enterprise Edition
+  # Uncomment the services below for Enterprise Edition.
+  # Requires a valid license key.
+  # ---------------------------------------------------------------------------
+  # oberwatch-enterprise:
+  #   image: ghcr.io/oberwatch/oberwatch-enterprise:latest
+  #   depends_on:
+  #     - postgres
+  #     - clickhouse
+  #   environment:
+  #     - OBERWATCH_LICENSE_KEY=your-license-key
+  #   ports:
+  #     - "8081:8080"
+  #
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     - POSTGRES_DB=oberwatch
+  #     - POSTGRES_USER=oberwatch
+  #     - POSTGRES_PASSWORD=change-me
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:24
+  #   volumes:
+  #     - clickhouse-data:/var/lib/clickhouse
+
 volumes:
   oberwatch-data:
+  # postgres-data:
+  # clickhouse-data:

@@ -82,6 +82,18 @@ func TestCalculateCost_AllDefaultModels(t *testing.T) {
 	}
 }
 
+func TestCalculateCost_AnthropicSnapshotModelUsesBasePricing(t *testing.T) {
+	t.Parallel()
+
+	table := NewPricingTable(nil, nil)
+
+	got := table.CalculateCost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
+	want := 6.0
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("CalculateCost(snapshot model) = %v, want %v", got, want)
+	}
+}
+
 func TestPricingOverrides_TableDriven(t *testing.T) {
 	t.Parallel()
 

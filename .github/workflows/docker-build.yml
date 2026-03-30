@@ -23,7 +23,7 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "tag=beta" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
@@ -33,6 +33,9 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            CHANNEL=${{ steps.tag.outputs.tag }}
+            COMMIT=${{ github.sha }}
           tags: |
             ghcr.io/oberwatch/oberwatch:${{ steps.tag.outputs.tag }}
             ghcr.io/oberwatch/oberwatch:sha-${{ github.sha }}
