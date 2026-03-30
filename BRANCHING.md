@@ -1,13 +1,13 @@
 # Branching Strategy
 
-Oberwatch uses GitHub Flow with a protected `staging` branch in front of `main`.
+Oberwatch uses a protected `staging` branch in front of `main`.
 
 ## Branch Overview
 
-- `main` is the production-ready branch. Every merge to `main` should be stable and eligible for release.
+- `main` is the beta / pre-production branch. Every merge to `main` should be stable enough for preview testing and eligible for a tagged release.
 - `staging` is the integration branch. Feature work lands here first for combined testing.
 - `feature/*` branches are short-lived branches created from `staging` for normal work.
-- `hotfix/*` branches are short-lived branches created from `main` for urgent production fixes.
+- `hotfix/*` branches are short-lived branches created from `main` for urgent fixes that must be promoted quickly toward the next beta or tagged release.
 
 ## Feature Workflow
 
@@ -32,10 +32,10 @@ Every pull request to `staging` must pass CI before merge.
 When `staging` is stable, open a pull request from `staging` to `main`.
 
 - Merge to `main` only after CI passes.
-- Use squash merge to keep history clean.
-- Treat every merge to `main` as production-ready.
+- Use a merge commit so `main` preserves the exact tested integration state from `staging`.
+- Treat every merge to `main` as beta / pre-production ready, not as the final stable release.
 
-Merges to `main` publish the `latest` container image. Merges to `staging` publish the `staging` container image.
+Merges to `main` publish the `beta` container image. Merges to `staging` publish the `staging` container image.
 
 ## Tagged Releases
 
@@ -43,7 +43,7 @@ Tagged releases are created from `main` only.
 
 - Create a tag like `v0.1.0` on `main`.
 - Pushing the tag runs the release workflow.
-- The release workflow publishes binaries plus container images to GHCR and Docker Hub.
+- The release workflow publishes binaries plus stable container images to GHCR and Docker Hub.
 - Container tags include the full version, the minor version alias, and `latest`.
 
 ## Hotfix Workflow
@@ -62,6 +62,8 @@ Open the hotfix pull request against `main`. After it merges, cherry-pick the sa
 
 - Create `feature/*` branches from `staging`.
 - Open normal pull requests into `staging`.
+- Use squash merge for normal feature PRs into `staging`.
 - Promote `staging` into `main` when the integration branch is stable.
+- Use a merge commit for `staging` -> `main` promotion PRs.
 - Create release tags from `main` only.
 - Create `hotfix/*` branches from `main`, merge them to `main`, then backport to `staging`.
