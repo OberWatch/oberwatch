@@ -291,7 +291,6 @@ func newManager(
 		}
 		normalized := normalizeAgent(entry.Name)
 		manager.agentPolicy[normalized] = policy
-		manager.knownAgents[normalized] = struct{}{}
 	}
 
 	if persistent && store != nil {

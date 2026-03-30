@@ -456,6 +456,85 @@ func TestSeedConfiguredAgentsAndPersistentFlush(t *testing.T) {
 	}
 }
 
+func TestNewPersistentManager_DoesNotPersistConfiguredAgentsWithoutTraffic(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		agentName string
+	}{
+		{
+			name:      "configured agent stays absent until first traffic",
+			agentName: "email-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Agents = []config.AgentBudgetConfig{
+				{
+					Name:           tt.agentName,
+					LimitUSD:       12,
+					Period:         config.BudgetPeriodWeekly,
+					ActionOnExceed: config.BudgetActionDowngrade,
+					DowngradeChain: []string{"claude-opus-4-6", "claude-sonnet-4-6"},
+				},
+			}
+
+			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "budget.db"), 0, nil)
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+
+			manager, err := NewPersistentManager(cfg, nil, store)
+			if err != nil {
+				t.Fatalf("NewPersistentManager() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = manager.Close()
+			})
+
+			if flushErr := manager.Flush(context.Background()); flushErr != nil {
+				t.Fatalf("Flush() error = %v", flushErr)
+			}
+
+			record, found, err := store.GetAgent(context.Background(), tt.agentName)
+			if err != nil {
+				t.Fatalf("GetAgent() error = %v", err)
+			}
+			if found {
+				t.Fatalf("GetAgent() found = true, want false, record = %#v", record)
+			}
+
+			manager.RecordSpend(tt.agentName, 1.25)
+			if flushErr := manager.Flush(context.Background()); flushErr != nil {
+				t.Fatalf("Flush(after traffic) error = %v", flushErr)
+			}
+
+			record, found, err = store.GetAgent(context.Background(), tt.agentName)
+			if err != nil {
+				t.Fatalf("GetAgent(after traffic) error = %v", err)
+			}
+			if !found {
+				t.Fatal("GetAgent(after traffic) found = false, want true")
+			}
+			if record.BudgetLimitUSD != 12 {
+				t.Fatalf("BudgetLimitUSD = %v, want 12", record.BudgetLimitUSD)
+			}
+			if record.BudgetSpentUSD != 1.25 {
+				t.Fatalf("BudgetSpentUSD = %v, want 1.25", record.BudgetSpentUSD)
+			}
+		})
+	}
+}
+
 func TestRecordSpendThresholdAlert(t *testing.T) {
 	t.Parallel()
 

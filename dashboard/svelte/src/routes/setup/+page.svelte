@@ -101,9 +101,25 @@
         </div>
       </div>
 
-      <div class="mt-6 rounded-xl border border-border-default bg-elevated p-4">
-        <p class="text-xs uppercase tracking-wide text-text-secondary">Proxy URL</p>
-        <p class="mt-2 font-mono text-sm text-text-primary">{proxyURL}</p>
+      <div class="mt-6 overflow-hidden rounded-2xl border border-border-default bg-elevated">
+        <div class="flex items-center gap-3 border-b border-border-default px-4 py-3">
+          <div class="flex items-center gap-2">
+            <span class="h-3 w-3 rounded-full bg-danger"></span>
+            <span class="h-3 w-3 rounded-full bg-warning"></span>
+            <span class="h-3 w-3 rounded-full bg-success"></span>
+          </div>
+          <p class="font-mono text-sm text-text-secondary">point any agent at Oberwatch</p>
+        </div>
+
+        <pre class="overflow-x-auto px-4 py-5 font-mono text-sm leading-7 text-text-primary/85"><code><span class="text-text-secondary/85"># Just change the base URL and add a header</span>
+curl <span class="text-danger">{proxyURL}</span><span class="text-accent">/v1/chat/completions</span> \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Oberwatch-Agent: research-agent" \
+  -d '&#123;
+    "model": "gpt-4.1-mini",
+    "messages": [&#123;"role": "user", "content": "Hello"&#125;]
+  &#125;'</code></pre>
       </div>
 
       <div class="mt-4 space-y-2 text-sm text-text-secondary">
