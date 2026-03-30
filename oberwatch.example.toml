@@ -1,0 +1,308 @@
+# =============================================================================
+# Oberwatch Example Configuration
+# =============================================================================
+# Copy this file to `oberwatch.toml` and adjust values for your environment.
+# Every option below includes a comment explaining what it controls.
+
+# -----------------------------------------------------------------------------
+# Server Settings
+# -----------------------------------------------------------------------------
+[server]
+# TCP port the Oberwatch HTTP server listens on.
+# Env: OBERWATCH_SERVER__PORT
+port = 8080
+
+# Bind address for incoming HTTP connections.
+# Use 127.0.0.1 for local-only access.
+# Env: OBERWATCH_SERVER__HOST
+host = "0.0.0.0"
+
+# Bearer token required for management API and dashboard endpoints.
+# Keep this secret in production.
+# Env: OBERWATCH_SERVER__ADMIN_TOKEN
+admin_token = "change-me-admin-token"
+
+# Enable or disable the embedded dashboard.
+# Env: OBERWATCH_SERVER__DASHBOARD
+dashboard = true
+
+# Structured log level.
+# Valid values: debug, info, warn, error
+# Env: OBERWATCH_SERVER__LOG_LEVEL
+log_level = "info"
+
+# Log output format.
+# Valid values: text, json
+# Env: OBERWATCH_SERVER__LOG_FORMAT
+log_format = "text"
+
+# Optional TLS certificate path for HTTPS mode.
+# Leave empty to run plain HTTP.
+# Env: OBERWATCH_SERVER__TLS_CERT
+tls_cert = ""
+
+# Optional TLS private key path for HTTPS mode.
+# Must be set together with tls_cert.
+# Env: OBERWATCH_SERVER__TLS_KEY
+tls_key = ""
+
+# -----------------------------------------------------------------------------
+# Upstream Provider Settings
+# -----------------------------------------------------------------------------
+[upstream]
+# Default provider used when path-based provider detection is ambiguous.
+# Valid values: openai, anthropic, ollama, custom
+# Env: OBERWATCH_UPSTREAM__DEFAULT_PROVIDER
+default_provider = "openai"
+
+# Upstream request timeout (Go duration string).
+# Env: OBERWATCH_UPSTREAM__TIMEOUT
+timeout = "120s"
+
+[upstream.openai]
+# Base URL for OpenAI-compatible endpoints.
+# Env: OBERWATCH_UPSTREAM__OPENAI__BASE_URL
+base_url = "https://api.openai.com"
+
+[upstream.anthropic]
+# Base URL for Anthropic API.
+# Env: OBERWATCH_UPSTREAM__ANTHROPIC__BASE_URL
+base_url = "https://api.anthropic.com"
+
+[upstream.ollama]
+# Base URL for local or remote Ollama server.
+# Env: OBERWATCH_UPSTREAM__OLLAMA__BASE_URL
+base_url = "http://localhost:11434"
+
+[upstream.custom]
+# Base URL for an additional OpenAI-compatible provider.
+# Leave empty when unused.
+# Env: OBERWATCH_UPSTREAM__CUSTOM__BASE_URL
+base_url = ""
+
+# -----------------------------------------------------------------------------
+# Gate (Budget / Cost Governor) Settings
+# -----------------------------------------------------------------------------
+[gate]
+# Enable budget enforcement and cost tracking.
+# Env: OBERWATCH_GATE__ENABLED
+enabled = true
+
+# Default model downgrade path when action_on_exceed is "downgrade".
+default_downgrade_chain = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+]
+
+# Spend percentage at which downgrade behavior begins.
+downgrade_threshold_pct = 80
+
+# Alert thresholds as percentages of budget used.
+alert_thresholds_pct = [50, 80, 100]
+
+[gate.global_budget]
+# Global shared budget across all agents.
+# Use 0 for "unlimited".
+limit_usd = 500
+
+# Reset period for global budget.
+# Valid values: hourly, daily, weekly, monthly
+period = "monthly"
+
+[gate.default_budget]
+# Default per-agent budget if no explicit [[gate.agents]] override exists.
+# Use 0 for "unlimited".
+limit_usd = 25
+
+# Reset period for the default per-agent budget.
+# Valid values: hourly, daily, weekly, monthly
+period = "daily"
+
+# Action when budget is exceeded.
+# Valid values: reject, downgrade, alert, kill
+action_on_exceed = "alert"
+
+[gate.runaway]
+# Enable high-frequency runaway request detection.
+enabled = true
+
+# Maximum requests allowed in the window before kill behavior triggers.
+max_requests = 100
+
+# Window size in seconds for runaway detection.
+window_seconds = 60
+
+[gate.identification]
+# Agent identity source.
+# Valid values: header, api_key, source_ip
+method = "header"
+
+# Explicit per-agent policies (two example agents configured).
+[[gate.agents]]
+# Stable agent name as seen in X-Oberwatch-Agent header or key mapping.
+name = "email-agent"
+
+# Agent-specific budget limit in USD for the chosen period.
+limit_usd = 10.00
+
+# Budget reset period for this agent.
+period = "daily"
+
+# Enforcement action for this agent.
+action_on_exceed = "downgrade"
+
+# Agent-specific downgrade chain override.
+downgrade_chain = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+[[gate.agents]]
+name = "finance-agent"
+limit_usd = 50.00
+period = "weekly"
+action_on_exceed = "reject"
+downgrade_chain = ["gpt-4.1", "gpt-4.1-mini"]
+
+# Optional API key prefix-to-agent mapping when identification.method = "api_key".
+# [[gate.api_key_map]]
+# api_key_prefix = "sk-proj-email"
+# agent = "email-agent"
+
+# -----------------------------------------------------------------------------
+# Alert Delivery Settings
+# -----------------------------------------------------------------------------
+[alerts]
+# Generic webhook URL for alert POSTs.
+webhook_url = ""
+
+# Slack incoming webhook URL for alert notifications.
+slack_webhook_url = ""
+
+[alerts.email]
+# Enable SMTP-based email alerting.
+enabled = false
+
+# SMTP server hostname.
+smtp_host = ""
+
+# SMTP server port.
+smtp_port = 587
+
+# SMTP username.
+smtp_user = ""
+
+# SMTP password or app-specific token.
+smtp_password = ""
+
+# Sender email address.
+from = ""
+
+# Recipient email addresses.
+to = []
+
+# -----------------------------------------------------------------------------
+# Trace Settings
+# -----------------------------------------------------------------------------
+[trace]
+# Enable trace capture and storage.
+enabled = true
+
+# Capture prompt/response payload content in traces.
+# Disable when handling sensitive data.
+capture_content = false
+
+# Max in-memory trace buffer size (used by memory storage mode).
+memory_buffer_size = 1000
+
+# Retention duration for persisted traces (Go duration string).
+retention = "168h"
+
+# Trace storage backend.
+# Valid values: memory, sqlite
+storage = "sqlite"
+
+# SQLite file path when storage = "sqlite".
+sqlite_path = "./oberwatch.db"
+
+# Mark active traces as timed out after this idle duration.
+trace_timeout = "30s"
+
+# -----------------------------------------------------------------------------
+# Behavioral Test Harness Settings
+# -----------------------------------------------------------------------------
+[test]
+# Directory containing YAML scenario files.
+scenarios_dir = "./scenarios"
+
+# Maximum number of concurrent test scenarios.
+concurrency = 4
+
+# Default timeout per scenario (Go duration string).
+timeout = "30s"
+
+[test.judge]
+# Model used for LLM-as-judge assertions.
+model = "claude-haiku-4-5"
+
+# Provider for the judge model.
+provider = "anthropic"
+
+# API key for the judge provider (if required).
+api_key = ""
+
+# -----------------------------------------------------------------------------
+# Pricing Table
+# Prices are USD per 1 million tokens.
+# -----------------------------------------------------------------------------
+[[pricing]]
+model = "gpt-4o"
+provider = "openai"
+input_per_million = 2.50
+output_per_million = 10.00
+
+[[pricing]]
+model = "gpt-4o-mini"
+provider = "openai"
+input_per_million = 0.15
+output_per_million = 0.60
+
+[[pricing]]
+model = "gpt-4.1"
+provider = "openai"
+input_per_million = 2.00
+output_per_million = 8.00
+
+[[pricing]]
+model = "gpt-4.1-mini"
+provider = "openai"
+input_per_million = 0.40
+output_per_million = 1.60
+
+[[pricing]]
+model = "claude-opus-4-6"
+provider = "anthropic"
+input_per_million = 5.00
+output_per_million = 25.00
+
+[[pricing]]
+model = "claude-sonnet-4-6"
+provider = "anthropic"
+input_per_million = 3.00
+output_per_million = 15.00
+
+[[pricing]]
+model = "claude-haiku-4-5"
+provider = "anthropic"
+input_per_million = 1.00
+output_per_million = 5.00
+
+[[pricing]]
+model = "gemini-2.5-pro"
+provider = "google"
+input_per_million = 1.25
+output_per_million = 10.00
+
+[[pricing]]
+model = "gemini-2.5-flash"
+provider = "google"
+input_per_million = 0.15
+output_per_million = 0.60
