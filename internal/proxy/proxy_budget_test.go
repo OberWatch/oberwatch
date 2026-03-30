@@ -110,7 +110,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	cfg.Gate.DefaultBudget.LimitUSD = 10
 	cfg.Gate.DefaultBudget.ActionOnExceed = config.BudgetActionDowngrade
 	cfg.Gate.DowngradeThresholdPct = 50
-	cfg.Gate.DefaultDowngradeChain = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
+	cfg.Gate.DefaultDowngradeChain = []string{"gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"}
 
 	manager := budget.NewManager(cfg.Gate, nil)
 	manager.RecordSpend("email-agent", 5.5)
@@ -124,7 +124,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	server := newTestServer(t, proxyServer)
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-4-6","stream":false,"messages":[{"role":"user","content":"hello"}]}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-4.1","stream":false,"messages":[{"role":"user","content":"hello"}]}`))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	_, _ = io.ReadAll(resp.Body)
 
 	gotBody := <-capturedBody
-	if !strings.Contains(gotBody, `"model":"claude-sonnet-4-6"`) {
+	if !strings.Contains(gotBody, `"model":"gpt-4.1-mini"`) {
 		t.Fatalf("forwarded body = %s, want downgraded model", gotBody)
 	}
 
