@@ -923,6 +923,7 @@ func TestRenameAgent(t *testing.T) {
 func TestCloneState(t *testing.T) {
 	t.Parallel()
 
+	//nolint:govet // keep test table readable.
 	tests := []struct {
 		name  string
 		state *agentState
@@ -981,6 +982,7 @@ func TestCloneState(t *testing.T) {
 func TestPersistedDisableReason(t *testing.T) {
 	t.Parallel()
 
+	//nolint:govet // keep test table readable.
 	tests := []struct {
 		name           string
 		status         string
@@ -1044,6 +1046,7 @@ func TestFirstNonZeroTime(t *testing.T) {
 	fallback := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
 	value := time.Date(2026, time.March, 25, 6, 0, 0, 0, time.UTC)
 
+	//nolint:govet // keep test table readable.
 	tests := []struct {
 		name     string
 		value    time.Time
