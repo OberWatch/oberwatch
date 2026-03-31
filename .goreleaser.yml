@@ -1,16 +1,53 @@
 version: 2
 builds:
-  - id: oberwatch
+  - id: oberwatch-linux-amd64
     main: ./cmd/oberwatch
     binary: oberwatch
     env:
       - CGO_ENABLED=1
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
+      - CC=gcc
+    goos: [linux]
+    goarch: [amd64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: oberwatch-linux-arm64
+    main: ./cmd/oberwatch
+    binary: oberwatch
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos: [linux]
+    goarch: [arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: oberwatch-darwin-amd64
+    main: ./cmd/oberwatch
+    binary: oberwatch
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [amd64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: oberwatch-darwin-arm64
+    main: ./cmd/oberwatch
+    binary: oberwatch
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [arm64]
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
