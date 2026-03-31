@@ -31,16 +31,24 @@ Thumbs.db
 # Environment
 .env
 .env.local
+*.key
+
+# Coverage (explicit)
+coverage.out
+
+# Node
+node_modules/
 
 # Dashboard build output
 dashboard/svelte/build/
-dashboard/svelte/node_modules/
 dashboard/svelte/.svelte-kit/
 
 # Temporary files
 tmp/
 .tools/
 
+# Runtime data
+.oberwatch/
 oberwatch
 *.db
 *.db-shm

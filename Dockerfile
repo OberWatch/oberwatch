@@ -20,11 +20,14 @@ RUN CGO_ENABLED=1 go build -ldflags="-s -w -X main.channel=${CHANNEL} -X main.co
 
 # Runtime stage
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates sqlite-libs
+RUN apk add --no-cache ca-certificates sqlite-libs && \
+    addgroup -S oberwatch && adduser -S oberwatch -G oberwatch && \
+    mkdir -p /data && chown oberwatch:oberwatch /data
 COPY --from=builder /app/oberwatch /usr/local/bin/oberwatch
 
 EXPOSE 8080
 VOLUME ["/data"]
 
+USER oberwatch
 ENTRYPOINT ["oberwatch"]
 CMD ["serve"]

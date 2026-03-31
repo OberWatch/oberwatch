@@ -74,7 +74,10 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 	reverseProxy := &httputil.ReverseProxy{
 		FlushInterval: -1,
 		Rewrite: func(req *httputil.ProxyRequest) {
-			targetProvider := detectProvider(req.In.URL.Path, defaultProvider)
+			targetProvider := defaultProvider
+			if route, ok := resolvedRouteFromContext(req.In.Context()); ok {
+				targetProvider = route.provider
+			}
 			target := targets[targetProvider]
 
 			req.SetURL(target)
@@ -121,11 +124,20 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 			hooks.Dashboard.ServeHTTP(w, r)
 			return
 		}
+		if route, ok := resolvedRouteFromContext(r.Context()); ok && route.anthropicCompat {
+			serveAnthropicOpenAICompat(w, r, route, targets, hooks)
+			return
+		}
 
 		reverseProxy.ServeHTTP(w, r)
 	})
 
-	chained := chain(proxyHandler, gateMiddleware(hooks), traceMiddleware(hooks.Trace))
+	chained := chain(
+		proxyHandler,
+		providerRoutingMiddleware(defaultProvider, targets, hooks.Logger),
+		gateMiddleware(hooks),
+		traceMiddleware(hooks.Trace),
+	)
 
 	return &Server{handler: chained}, nil
 }
@@ -146,6 +158,7 @@ func buildTargets(cfg config.UpstreamConfig) (map[config.ProviderConfigName]*url
 	endpoints := []endpoint{
 		{name: config.ProviderOpenAI, baseURL: cfg.OpenAI.BaseURL},
 		{name: config.ProviderAnthropic, baseURL: cfg.Anthropic.BaseURL},
+		{name: config.ProviderGoogle, baseURL: cfg.Google.BaseURL},
 		{name: config.ProviderOllama, baseURL: cfg.Ollama.BaseURL},
 		{name: config.ProviderCustom, baseURL: cfg.Custom.BaseURL},
 	}
@@ -177,22 +190,6 @@ func buildTargets(cfg config.UpstreamConfig) (map[config.ProviderConfigName]*url
 	return targets, nil
 }
 
-func detectProvider(path string, defaultProvider config.ProviderConfigName) config.ProviderConfigName {
-	normalized := strings.TrimSuffix(path, "/")
-	if normalized == "" {
-		normalized = path
-	}
-
-	switch normalized {
-	case "/v1/chat/completions", "/v1/completions":
-		return config.ProviderOpenAI
-	case "/v1/messages":
-		return config.ProviderAnthropic
-	default:
-		return defaultProvider
-	}
-}
-
 func shouldServeDashboard(method string, requestPath string) bool {
 	if method != http.MethodGet && method != http.MethodHead {
 		return false
@@ -202,6 +199,9 @@ func shouldServeDashboard(method string, requestPath string) bool {
 
 func isKnownProxyPath(requestPath string) bool {
 	normalized := strings.TrimSuffix(strings.TrimSpace(requestPath), "/")
+	if strings.HasPrefix(normalized, "/api/") {
+		return true
+	}
 	switch normalized {
 	case "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/models", "/v1/messages":
 		return true
@@ -289,12 +289,15 @@ func gateMiddleware(hooks Hooks) func(http.Handler) http.Handler {
 				meta := budgetRequestMeta{
 					agent:         agent,
 					model:         model,
-					provider:      string(detectProvider(r.URL.Path, config.ProviderOpenAI)),
+					provider:      string(config.ProviderOpenAI),
 					traceID:       strings.TrimSpace(r.Header.Get("X-Oberwatch-Trace-ID")),
 					taskID:        strings.TrimSpace(r.Header.Get("X-Oberwatch-Task")),
 					originalModel: originalModel,
 					streaming:     streaming,
 					downgraded:    downgraded,
+				}
+				if route, ok := resolvedRouteFromContext(r.Context()); ok {
+					meta.provider = string(route.provider)
 				}
 				*r = *r.WithContext(context.WithValue(r.Context(), budgetContextKey{}, meta))
 			}

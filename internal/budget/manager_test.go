@@ -851,6 +851,383 @@ func TestRecordSpend_NegativeIgnored(t *testing.T) {
 	}
 }
 
+func TestRenameAgent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		oldName   string
+		newName   string
+		wantError bool
+	}{
+		{name: "same name is no-op", oldName: "agent-a", newName: "agent-a", wantError: false},
+		{name: "rename to new name succeeds", oldName: "agent-a", newName: "agent-renamed", wantError: false},
+		{name: "rename to existing name fails", oldName: "agent-a", newName: "agent-b", wantError: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "rename.db"), 0, nil)
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
+			manager, err := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, clock, nil)
+			if err != nil {
+				t.Fatalf("NewPersistentManagerWithClockAndDispatcher() error = %v", err)
+			}
+			t.Cleanup(func() { _ = manager.Close() })
+
+			manager.RecordSpend("agent-a", 2.5)
+			manager.RecordSpend("agent-b", 1.0)
+			if flushErr := manager.Flush(context.Background()); flushErr != nil {
+				t.Fatalf("Flush() error = %v", flushErr)
+			}
+
+			if tt.oldName == tt.newName {
+				if renameErr := manager.RenameAgent(context.Background(), tt.oldName, tt.newName); renameErr != nil {
+					t.Fatalf("RenameAgent(same) error = %v", renameErr)
+				}
+				return
+			}
+
+			renameErr := manager.RenameAgent(context.Background(), tt.oldName, tt.newName)
+			if tt.wantError {
+				if renameErr == nil {
+					t.Fatal("RenameAgent() error = nil, want non-nil")
+				}
+				return
+			}
+			if renameErr != nil {
+				t.Fatalf("RenameAgent() error = %v", renameErr)
+			}
+
+			view := manager.GetBudget(tt.newName)
+			if view.SpentUSD != 2.5 {
+				t.Fatalf("renamed agent spent = %v, want 2.5", view.SpentUSD)
+			}
+			oldView := manager.GetBudget(tt.oldName)
+			if oldView.SpentUSD != 0 {
+				t.Fatalf("old agent spent = %v, want 0", oldView.SpentUSD)
+			}
+		})
+	}
+}
+
+func TestCloneState(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table readable.
+	tests := []struct {
+		name  string
+		state *agentState
+	}{
+		{name: "nil state", state: nil},
+		{
+			name: "populated state",
+			state: &agentState{
+				spentUSD:        5.0,
+				lastAlertedPct:  50,
+				periodStartedAt: time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC),
+				periodResetsAt:  time.Date(2026, time.March, 27, 12, 0, 0, 0, time.UTC),
+				lastSeenAt:      time.Date(2026, time.March, 26, 13, 0, 0, 0, time.UTC),
+				requestTimes:    []time.Time{time.Date(2026, time.March, 26, 12, 30, 0, 0, time.UTC)},
+				triggeredAlerts: map[float64]bool{50: true},
+				killed:          true,
+				disableReason:   disableReasonManualKill,
+				dirty:           true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cloned := cloneState(tt.state)
+			if cloned == nil {
+				t.Fatal("cloneState() returned nil")
+			}
+			if tt.state == nil {
+				if len(cloned.triggeredAlerts) != 0 {
+					t.Fatalf("cloneState(nil).triggeredAlerts len = %d, want 0", len(cloned.triggeredAlerts))
+				}
+				return
+			}
+			if cloned.spentUSD != tt.state.spentUSD {
+				t.Fatalf("cloned.spentUSD = %v, want %v", cloned.spentUSD, tt.state.spentUSD)
+			}
+			if cloned.killed != tt.state.killed {
+				t.Fatalf("cloned.killed = %v, want %v", cloned.killed, tt.state.killed)
+			}
+			if cloned.disableReason != tt.state.disableReason {
+				t.Fatalf("cloned.disableReason = %q, want %q", cloned.disableReason, tt.state.disableReason)
+			}
+			// Verify deep copy: mutate original, cloned should not change.
+			tt.state.triggeredAlerts[80] = true
+			if _, found := cloned.triggeredAlerts[80]; found {
+				t.Fatal("cloned triggeredAlerts shares reference with original")
+			}
+		})
+	}
+}
+
+func TestPersistedDisableReason(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table readable.
+	tests := []struct {
+		name           string
+		status         string
+		limitUSD       float64
+		spentUSD       float64
+		actionOnExceed config.BudgetAction
+		want           string
+	}{
+		{name: "budget_exceeded status", status: "budget_exceeded", want: disableReasonBudgetExceeded},
+		{name: "manual_kill status", status: "manual_kill", want: disableReasonManualKill},
+		{name: "runaway_detected status", status: "runaway_detected", want: disableReasonRunaway},
+		{name: "killed with budget exceeded", status: "killed", limitUSD: 10, spentUSD: 10, actionOnExceed: config.BudgetActionKill, want: disableReasonBudgetExceeded},
+		{name: "killed manual", status: "killed", limitUSD: 10, spentUSD: 5, actionOnExceed: config.BudgetActionKill, want: disableReasonManualKill},
+		{name: "active status", status: "active", want: disableReasonNone},
+		{name: "empty status", status: "", want: disableReasonNone},
+		{name: "unknown status", status: "something_else", want: disableReasonNone},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := persistedDisableReason(tt.status, tt.limitUSD, tt.spentUSD, tt.actionOnExceed)
+			if got != tt.want {
+				t.Fatalf("persistedDisableReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPersistedStatusForState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		state *agentState
+		want  string
+	}{
+		{name: "nil state", state: nil, want: "active"},
+		{name: "not killed", state: &agentState{killed: false}, want: "active"},
+		{name: "killed with reason", state: &agentState{killed: true, disableReason: disableReasonRunaway}, want: disableReasonRunaway},
+		{name: "killed no reason", state: &agentState{killed: true, disableReason: ""}, want: "killed"},
+		{name: "killed whitespace reason", state: &agentState{killed: true, disableReason: "  "}, want: "killed"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := persistedStatusForState(tt.state)
+			if got != tt.want {
+				t.Fatalf("persistedStatusForState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFirstNonZeroTime(t *testing.T) {
+	t.Parallel()
+
+	fallback := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	value := time.Date(2026, time.March, 25, 6, 0, 0, 0, time.UTC)
+
+	//nolint:govet // keep test table readable.
+	tests := []struct {
+		name     string
+		value    time.Time
+		fallback time.Time
+		want     time.Time
+	}{
+		{name: "zero value uses fallback", value: time.Time{}, fallback: fallback, want: fallback.UTC()},
+		{name: "non-zero value used", value: value, fallback: fallback, want: value.UTC()},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := firstNonZeroTime(tt.value, tt.fallback)
+			if !got.Equal(tt.want) {
+				t.Fatalf("firstNonZeroTime() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTriggeredAlerts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		thresholds []float64
+		limitUSD   float64
+		spentUSD   float64
+		wantFired  int
+	}{
+		{name: "no thresholds", thresholds: nil, limitUSD: 10, spentUSD: 5, wantFired: 0},
+		{name: "none crossed", thresholds: []float64{50, 80}, limitUSD: 10, spentUSD: 4, wantFired: 0},
+		{name: "one crossed", thresholds: []float64{50, 80}, limitUSD: 10, spentUSD: 6, wantFired: 1},
+		{name: "all crossed", thresholds: []float64{50, 80, 100}, limitUSD: 10, spentUSD: 10, wantFired: 3},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := triggeredAlerts(tt.thresholds, tt.limitUSD, tt.spentUSD)
+			if len(got) != tt.wantFired {
+				t.Fatalf("triggeredAlerts() fired = %d, want %d", len(got), tt.wantFired)
+			}
+		})
+	}
+}
+
+func TestToBudgetView_NegativeRemaining(t *testing.T) {
+	t.Parallel()
+
+	policy := agentPolicy{limitUSD: 5, period: config.BudgetPeriodDaily, actionOnExceed: config.BudgetActionReject}
+	state := &agentState{spentUSD: 8, triggeredAlerts: make(map[float64]bool)}
+
+	view := toBudgetView("over-agent", policy, state)
+	if view.RemainingUSD != 0 {
+		t.Fatalf("toBudgetView().RemainingUSD = %v, want 0", view.RemainingUSD)
+	}
+	if view.Status != "active" {
+		t.Fatalf("toBudgetView().Status = %q, want %q", view.Status, "active")
+	}
+}
+
+func TestPersistentManagerWithClockAndDispatcher(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseGateConfig()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "dispatch.db"), 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
+	dispatcher := &capturingDispatcher{}
+	manager, err := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, clock, dispatcher)
+	if err != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	manager.RecordSpend("agent-a", 5.1) // 51% — crosses 50% threshold
+	events := dispatcher.snapshot()
+	foundThreshold := false
+	for _, e := range events {
+		if e.Type == alert.TypeBudgetThreshold {
+			foundThreshold = true
+		}
+	}
+	if !foundThreshold {
+		t.Fatal("expected budget_threshold alert, got none")
+	}
+
+	if flushErr := manager.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("Flush() error = %v", flushErr)
+	}
+	record, found, getErr := store.GetAgent(context.Background(), "agent-a")
+	if getErr != nil {
+		t.Fatalf("GetAgent() error = %v", getErr)
+	}
+	if !found {
+		t.Fatal("GetAgent() found = false, want true")
+	}
+	if record.BudgetSpentUSD != 5.1 {
+		t.Fatalf("persisted BudgetSpentUSD = %v, want 5.1", record.BudgetSpentUSD)
+	}
+}
+
+func TestLoadPersistedAgents_RestoresState(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseGateConfig()
+	dbPath := filepath.Join(t.TempDir(), "load.db")
+	store, err := storage.NewSQLiteStore(dbPath, 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+
+	clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
+
+	// Create first manager, add state, flush, close.
+	m1, err := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, clock, nil)
+	if err != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher(m1) error = %v", err)
+	}
+	m1.RecordSpend("persisted-agent", 7.5)
+	m1.KillAgent("killed-agent")
+	if flushErr := m1.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("m1.Flush() error = %v", flushErr)
+	}
+	_ = m1.Close()
+	_ = store.Close()
+
+	// Reopen store and create new manager — should load persisted state.
+	store2, err := storage.NewSQLiteStore(dbPath, 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) error = %v", err)
+	}
+	t.Cleanup(func() { _ = store2.Close() })
+
+	m2, err := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store2, clock, nil)
+	if err != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher(m2) error = %v", err)
+	}
+	t.Cleanup(func() { _ = m2.Close() })
+
+	view := m2.GetBudget("persisted-agent")
+	if view.SpentUSD != 7.5 {
+		t.Fatalf("loaded SpentUSD = %v, want 7.5", view.SpentUSD)
+	}
+
+	killedView := m2.GetBudget("killed-agent")
+	if killedView.Status != "killed" {
+		t.Fatalf("loaded killed agent status = %q, want %q", killedView.Status, "killed")
+	}
+}
+
+func TestFlushAgentIfNeeded_EmptyAgent(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseGateConfig()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "flush-empty.db"), 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
+	manager, err := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, clock, nil)
+	if err != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	// Should not panic or error for empty/whitespace agent.
+	manager.flushAgentIfNeeded("")
+	manager.flushAgentIfNeeded("   ")
+}
+
 func TestBudgetViewsAndMutations(t *testing.T) {
 	t.Parallel()
 

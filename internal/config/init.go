@@ -55,7 +55,7 @@ tls_key = ""
 # -----------------------------------------------------------------------------
 [upstream]
 # Default upstream provider when auto-detection is ambiguous.
-# Options: "openai", "anthropic", "ollama", "custom"
+# Options: "openai", "anthropic", "google", "ollama", "custom"
 # Default: "openai"
 default_provider = "openai"
 
@@ -72,6 +72,11 @@ base_url = "https://api.openai.com"
 # Base URL for Anthropic API.
 # Default: "https://api.anthropic.com"
 base_url = "https://api.anthropic.com"
+
+[upstream.google]
+# Base URL for Google Gemini OpenAI-compatible API.
+# Default: "https://generativelanguage.googleapis.com/v1beta/openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 [upstream.ollama]
 # Base URL for Ollama.

@@ -26,39 +26,33 @@ type capturedRequest struct {
 func TestServer_ProviderDetectionRouting(t *testing.T) {
 	t.Parallel()
 
+	//nolint:govet // keep test table fields grouped for readability.
 	tests := []struct {
 		name            string
 		path            string
+		requestBody     string
 		defaultProvider config.ProviderConfigName
 		wantProvider    string
+		requestHeaders  map[string]string
 	}{
-		{
-			name:            "chat completions route to openai",
-			path:            "/v1/chat/completions",
-			defaultProvider: config.ProviderAnthropic,
-			wantProvider:    "openai",
-		},
-		{
-			name:            "completions route to openai",
-			path:            "/v1/completions",
-			defaultProvider: config.ProviderAnthropic,
-			wantProvider:    "openai",
-		},
 		{
 			name:            "messages route to anthropic",
 			path:            "/v1/messages",
+			requestBody:     `{"model":"claude-haiku-4-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`,
 			defaultProvider: config.ProviderOpenAI,
 			wantProvider:    "anthropic",
 		},
 		{
-			name:            "unknown path uses default provider",
+			name:            "models uses explicit provider header",
 			path:            "/v1/models",
 			defaultProvider: config.ProviderAnthropic,
-			wantProvider:    "anthropic",
+			wantProvider:    "openai",
+			requestHeaders:  map[string]string{providerOverrideHeader: string(config.ProviderOpenAI)},
 		},
 		{
-			name:            "routes with trailing slash still map correctly",
+			name:            "routes with trailing slash by model family",
 			path:            "/v1/chat/completions/",
+			requestBody:     `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`,
 			defaultProvider: config.ProviderAnthropic,
 			wantProvider:    "openai",
 		},
@@ -82,7 +76,21 @@ func TestServer_ProviderDetectionRouting(t *testing.T) {
 			}))
 			t.Cleanup(anthropicServer.Close)
 
+			googleServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "google"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(googleServer.Close)
+
+			ollamaServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "ollama"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(ollamaServer.Close)
+
 			cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+			cfg.Upstream.Google.BaseURL = googleServer.URL
+			cfg.Upstream.Ollama.BaseURL = ollamaServer.URL
 			cfg.Upstream.DefaultProvider = tt.defaultProvider
 			proxyServer, err := New(cfg, Hooks{})
 			if err != nil {
@@ -92,9 +100,12 @@ func TestServer_ProviderDetectionRouting(t *testing.T) {
 			server := newTestServer(t, proxyServer)
 			t.Cleanup(server.Close)
 
-			req, err := http.NewRequest(http.MethodPost, server.URL+tt.path, strings.NewReader(`{"hello":"world"}`))
+			req, err := http.NewRequest(http.MethodPost, server.URL+tt.path, strings.NewReader(tt.requestBody))
 			if err != nil {
 				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.requestHeaders {
+				req.Header.Set(key, value)
 			}
 
 			resp, err := server.Client().Do(req)
@@ -118,6 +129,245 @@ func TestServer_ProviderDetectionRouting(t *testing.T) {
 				t.Fatal("timed out waiting for upstream request")
 			}
 		})
+	}
+}
+
+func TestServer_OpenAICompatibleRoutesByModel(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep test table fields grouped for readability.
+	tests := []struct {
+		name         string
+		model        string
+		wantProvider string
+	}{
+		{name: "gpt routes to openai", model: "gpt-4o-mini", wantProvider: "openai"},
+		{name: "gemini routes to google", model: "gemini-2.5-flash", wantProvider: "google"},
+		{name: "llama routes to ollama", model: "llama3.2", wantProvider: "ollama"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			received := make(chan string, 1)
+			openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "openai"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(openAIServer.Close)
+
+			anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "anthropic"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(anthropicServer.Close)
+
+			googleServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "google"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(googleServer.Close)
+
+			ollamaServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- "ollama"
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(ollamaServer.Close)
+
+			cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+			cfg.Upstream.Google.BaseURL = googleServer.URL
+			cfg.Upstream.Ollama.BaseURL = ollamaServer.URL
+			proxyServer, err := New(cfg, Hooks{})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			server := newTestServer(t, proxyServer)
+			t.Cleanup(server.Close)
+
+			reqBody := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hello"}]}`, tt.model)
+			req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(reqBody))
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			t.Cleanup(func() { _ = resp.Body.Close() })
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusOK)
+			}
+
+			select {
+			case got := <-received:
+				if got != tt.wantProvider {
+					t.Fatalf("routed provider = %q, want %q", got, tt.wantProvider)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for upstream request")
+			}
+		})
+	}
+}
+
+func TestServer_AnthropicOpenAICompatTransformsRequestAndResponse(t *testing.T) {
+	t.Parallel()
+
+	requestBodies := make(chan string, 1)
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
+		requestBodies <- string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_123","model":"claude-haiku-4-5","content":[{"type":"text","text":"anthropic ok"}],"usage":{"input_tokens":18,"output_tokens":10},"stop_reason":"end_turn"}`))
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("openai upstream should not be called for claude compatibility request")
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	proxyServer, err := New(cfg, Hooks{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer anthropic-key")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if !strings.Contains(string(body), `"object":"chat.completion"`) {
+		t.Fatalf("response body = %q, want OpenAI-compatible shape", string(body))
+	}
+	if !strings.Contains(string(body), `"content":"anthropic ok"`) {
+		t.Fatalf("response body = %q, want translated content", string(body))
+	}
+
+	gotRequest := <-requestBodies
+	if !strings.Contains(gotRequest, `"model":"claude-haiku-4-5"`) || !strings.Contains(gotRequest, `"max_tokens":1024`) {
+		t.Fatalf("anthropic request = %s, want translated anthropic body", gotRequest)
+	}
+}
+
+func TestServer_UnknownOpenAICompatibleModelReturnsProviderResolutionError(t *testing.T) {
+	t.Parallel()
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called when provider resolution fails")
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called when provider resolution fails")
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	proxyServer, err := New(cfg, Hooks{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"mystery-model","messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if !strings.Contains(string(body), "provider_resolution_failed") {
+		t.Fatalf("body = %q, want provider resolution error", string(body))
+	}
+}
+
+func TestServer_OllamaNativeAPIRoutesToOllama(t *testing.T) {
+	t.Parallel()
+
+	received := make(chan string, 1)
+	ollamaServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(ollamaServer.Close)
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("openai upstream should not be called for native ollama requests")
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("anthropic upstream should not be called for native ollama requests")
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	cfg.Upstream.Ollama.BaseURL = ollamaServer.URL
+	proxyServer, err := New(cfg, Hooks{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hello"}],"stream":false}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := <-received; got != "/api/chat" {
+		t.Fatalf("routed path = %q, want %q", got, "/api/chat")
 	}
 }
 
@@ -584,7 +834,7 @@ func TestServer_ProxyErrorReturnsBadGateway(t *testing.T) {
 			server := newTestServer(t, proxyServer)
 			t.Cleanup(server.Close)
 
-			req, err := http.NewRequest(http.MethodPost, server.URL+tt.path, bytes.NewBufferString(`{"stream":false}`))
+			req, err := http.NewRequest(http.MethodPost, server.URL+tt.path, bytes.NewBufferString(`{"model":"gpt-4o-mini","stream":false}`))
 			if err != nil {
 				t.Fatalf("NewRequest() error = %v", err)
 			}
