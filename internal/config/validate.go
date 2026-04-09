@@ -94,9 +94,6 @@ func validateGate(gate GateConfig) []string {
 	problems = append(problems, validateBudgetPeriod("gate.default_budget.period", gate.DefaultBudget.Period)...)
 	problems = append(problems, validateBudgetAction("gate.default_budget.action_on_exceed", gate.DefaultBudget.ActionOnExceed)...)
 
-	if gate.DefaultBudget.ActionOnExceed == BudgetActionDowngrade && len(gate.DefaultDowngradeChain) == 0 {
-		problems = append(problems, "gate.default_downgrade_chain must not be empty when gate.default_budget.action_on_exceed is downgrade")
-	}
 	if gate.DowngradeThresholdPct < 0 || gate.DowngradeThresholdPct > 100 {
 		problems = append(problems, fmt.Sprintf("gate.downgrade_threshold_pct must be between 0 and 100, got %v", gate.DowngradeThresholdPct))
 	}
@@ -135,9 +132,7 @@ func validateGate(gate GateConfig) []string {
 		}
 		problems = append(problems, validateBudgetPeriod(fmt.Sprintf("gate.agents[%d].period", i), agent.Period)...)
 		problems = append(problems, validateBudgetAction(fmt.Sprintf("gate.agents[%d].action_on_exceed", i), agent.ActionOnExceed)...)
-		if agent.ActionOnExceed == BudgetActionDowngrade && len(agent.DowngradeChain) == 0 && len(gate.DefaultDowngradeChain) == 0 {
-			problems = append(problems, fmt.Sprintf("gate.agents[%d].downgrade_chain must not be empty when action_on_exceed is downgrade and no gate.default_downgrade_chain is set", i))
-		}
+
 	}
 	for i, entry := range gate.APIKeyMap {
 		if strings.TrimSpace(entry.APIKeyPrefix) == "" {
