@@ -580,6 +580,8 @@ func (m *BudgetManager) EmergencyStop() bool {
 }
 
 // RewriteModelForDowngrade rewrites the request body model to the next model in chain.
+// If no explicit chain is configured for the agent, the built-in provider chain is used
+// based on the model prefix (gpt-*, claude-*, gemini-*).
 func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byte) ([]byte, string, string, bool, error) {
 	normalizedAgent := normalizeAgent(agent)
 	if len(bytes.TrimSpace(requestBody)) == 0 {
@@ -589,10 +591,6 @@ func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byt
 	m.mu.RLock()
 	policy := m.policyForAgentLocked(normalizedAgent)
 	m.mu.RUnlock()
-
-	if len(policy.downgradeChain) < 2 {
-		return requestBody, "", "", false, nil
-	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(requestBody, &payload); err != nil {
@@ -609,7 +607,16 @@ func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byt
 		return requestBody, "", "", false, nil
 	}
 
-	nextModel := nextInDowngradeChain(policy.downgradeChain, currentModel)
+	chain := policy.downgradeChain
+	if len(chain) == 0 {
+		// No explicit chain configured: fall back to built-in provider chain.
+		chain = builtinChainForModel(currentModel)
+	}
+	if len(chain) < 2 {
+		return requestBody, "", "", false, nil
+	}
+
+	nextModel := nextInDowngradeChain(chain, currentModel)
 	if nextModel == "" {
 		return requestBody, currentModel, "", false, nil
 	}
@@ -748,7 +755,7 @@ func percentageUsed(limit float64, spent float64) float64 {
 }
 
 func shouldDowngradeForThreshold(policy agentPolicy, projectedSpend float64) bool {
-	if policy.limitUSD <= 0 || len(policy.downgradeChain) == 0 {
+	if policy.limitUSD <= 0 {
 		return false
 	}
 	threshold := policy.downgradeThresholdPct
