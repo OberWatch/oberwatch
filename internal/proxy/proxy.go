@@ -97,6 +97,10 @@ func New(cfg config.Config, hooks Hooks) (*Server, error) {
 			if !ok {
 				return nil
 			}
+			if meta.downgraded && meta.originalModel != "" {
+				response.Header.Set("X-Oberwatch-Downgraded", "true")
+				response.Header.Set("X-Oberwatch-Original-Model", meta.originalModel)
+			}
 			response.Body = newBudgetTrackingBody(
 				response.Body,
 				response.StatusCode,
