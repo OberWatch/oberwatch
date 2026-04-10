@@ -359,7 +359,9 @@ func writeEmergencyStopError(w http.ResponseWriter) {
 //nolint:govet // keep fields grouped by response interception lifecycle.
 type budgetTrackingBody struct {
 	statusCode  int
-	buffer      bytes.Buffer
+	buffer      bytes.Buffer            // non-streaming only
+	sseAcc      *pricing.SSEAccumulator // streaming only (zero-copy)
+	streaming   bool
 	once        sync.Once
 	inner       io.ReadCloser
 	manager     *budget.BudgetManager
@@ -380,22 +382,30 @@ func newBudgetTrackingBody(
 	sink storage.CostRecordSink,
 	logger *slog.Logger,
 ) io.ReadCloser {
-	return &budgetTrackingBody{
+	isStreaming := meta.streaming || strings.Contains(strings.ToLower(contentType), "text/event-stream")
+	b := &budgetTrackingBody{
 		inner:       inner,
 		statusCode:  statusCode,
 		contentType: contentType,
+		streaming:   isStreaming,
 		meta:        meta,
 		manager:     manager,
 		pricing:     pricingTable,
 		sink:        sink,
 		logger:      logger,
 	}
+	if isStreaming {
+		b.sseAcc = pricing.NewSSEAccumulator()
+	}
+	return b
 }
 
 func (b *budgetTrackingBody) Read(payload []byte) (int, error) {
 	n, err := b.inner.Read(payload)
 	if n > 0 {
-		if _, writeErr := b.buffer.Write(payload[:n]); writeErr != nil && b.logger != nil {
+		if b.streaming {
+			b.sseAcc.Write(payload[:n])
+		} else if _, writeErr := b.buffer.Write(payload[:n]); writeErr != nil && b.logger != nil {
 			b.logger.Warn("failed buffering response body for budget accounting", "error", writeErr)
 		}
 	}
@@ -421,12 +431,11 @@ func (b *budgetTrackingBody) finalize() {
 			return
 		}
 
-		body := b.buffer.Bytes()
 		var usage pricing.Usage
-		if b.meta.streaming || strings.Contains(strings.ToLower(b.contentType), "text/event-stream") {
-			usage = pricing.AccumulateStreamingUsage(b.meta.provider, body, b.logger)
+		if b.streaming {
+			usage = b.sseAcc.Usage(b.meta.provider, b.logger)
 		} else {
-			usage = pricing.ExtractUsageFromResponse(b.meta.provider, body, b.logger)
+			usage = pricing.ExtractUsageFromResponse(b.meta.provider, b.buffer.Bytes(), b.logger)
 		}
 
 		cost := b.pricing.CalculateCost(b.meta.model, usage.InputTokens, usage.OutputTokens)
