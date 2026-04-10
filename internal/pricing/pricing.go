@@ -137,9 +137,11 @@ func ExtractUsageFromResponse(provider string, responseBody []byte, logger *slog
 	}
 }
 
-// AccumulateStreamingUsage extracts usage from SSE chunks and returns final token counts.
+// AccumulateStreamingUsage extracts usage from a fully buffered SSE response.
+// When no usage field is found, it falls back to accumulating delta.content byte length
+// before resorting to whole-body-length estimation.
 func AccumulateStreamingUsage(provider string, sseChunks []byte, logger *slog.Logger) Usage {
-	var usage Usage
+	var inputTokens, outputTokens, deltaContentLen int
 	scanner := bufio.NewScanner(bytes.NewReader(sseChunks))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -148,35 +150,36 @@ func AccumulateStreamingUsage(provider string, sseChunks []byte, logger *slog.Lo
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "" || payload == "[DONE]" {
 			continue
 		}
-
-		inputTokens, outputTokens, ok := extractUsage([]byte(payload))
-		if !ok {
+		raw := []byte(payload)
+		if input, output, ok := extractUsage(raw); ok {
+			if input > 0 {
+				inputTokens = input
+			}
+			if output > 0 {
+				outputTokens = output
+			}
 			continue
 		}
-		if inputTokens > 0 {
-			usage.InputTokens = inputTokens
-		}
-		if outputTokens > 0 {
-			usage.OutputTokens = outputTokens
+		if content, ok := extractDeltaContent(raw); ok {
+			deltaContentLen += len(content)
 		}
 	}
 
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		return usage
+	if inputTokens > 0 || outputTokens > 0 {
+		return Usage{InputTokens: inputTokens, OutputTokens: outputTokens}
 	}
-
+	if deltaContentLen > 0 {
+		tokens := estimateTokensFromBodyLength(deltaContentLen)
+		warnMissingUsage(logger, provider, deltaContentLen, true)
+		return Usage{OutputTokens: tokens, Estimated: true}
+	}
 	estimated := estimateTokensFromBodyLength(len(sseChunks))
 	warnMissingUsage(logger, provider, len(sseChunks), true)
-	return Usage{
-		InputTokens:  estimated,
-		OutputTokens: estimated,
-		Estimated:    true,
-	}
+	return Usage{InputTokens: estimated, OutputTokens: estimated, Estimated: true}
 }
 
 func extractUsage(rawJSON []byte) (int, int, bool) {
