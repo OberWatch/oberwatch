@@ -367,18 +367,23 @@ fetch_latest_tag() {
 }
 
 download_binary() {
-  local asset_name download_url target
-  asset_name="oberwatch-${RELEASE_OS}-${RELEASE_ARCH}"
+  local version asset_name download_url archive binary_path
+  version="${LATEST_TAG#v}"
+  asset_name="oberwatch_${version}_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
   download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${asset_name}"
-  target="${TMP_DIR}/${asset_name}"
+  archive="${TMP_DIR}/${asset_name}"
 
   log "Downloading ${asset_name} from ${LATEST_TAG}..."
-  curl -fsSL "${download_url}" -o "${target}" || fail "failed to download ${download_url}"
-  [ -s "${target}" ] || fail "downloaded binary is empty: ${target}"
-  chmod +x "${target}"
-  [ -x "${target}" ] || fail "downloaded binary is not executable: ${target}"
+  curl -fsSL "${download_url}" -o "${archive}" || fail "failed to download ${download_url}"
+  [ -s "${archive}" ] || fail "downloaded archive is empty: ${archive}"
 
-  DOWNLOADED_BINARY="${target}"
+  log "Extracting binary..."
+  tar -xzf "${archive}" -C "${TMP_DIR}" oberwatch || fail "failed to extract binary from ${archive}"
+  binary_path="${TMP_DIR}/oberwatch"
+  [ -f "${binary_path}" ] || fail "binary not found after extraction: ${binary_path}"
+  chmod +x "${binary_path}"
+
+  DOWNLOADED_BINARY="${binary_path}"
 }
 
 install_binary() {
@@ -543,6 +548,10 @@ main() {
     else
       exit 0
     fi
+  fi
+
+  if [ "${RELEASE_OS}" = "darwin" ]; then
+    fail "macOS binaries are not yet available. Install via Docker instead:\n  docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest"
   fi
 
   fetch_latest_tag
