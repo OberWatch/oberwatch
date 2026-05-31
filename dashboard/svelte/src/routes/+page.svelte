@@ -10,8 +10,10 @@
     AgentsResponse,
     Alert,
     AlertsResponse,
+    BudgetsResponse,
     CostBreakdown,
     CostsResponse,
+    GlobalBudget,
     HealthResponse
   } from '$lib/types';
 
@@ -34,6 +36,7 @@
   let labels = $state<string[]>([]);
   let values = $state<number[]>([]);
   let recentAlerts = $state<Alert[]>([]);
+  let globalBudget = $state<GlobalBudget | null>(null);
 
   const lineDatasets = $derived<ChartDataset<'line', number[]>[]>([
     {
@@ -70,11 +73,12 @@
 
     try {
       const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const [costs, agentsRes, health, alertsRes] = await Promise.all([
+      const [costs, agentsRes, health, alertsRes, budgetsRes] = await Promise.all([
         fetchJSON<CostsResponse>(`/costs?group_by=hour&from=${encodeURIComponent(from)}`),
         fetchJSON<AgentsResponse>('/agents'),
         fetchJSON<HealthResponse>('/health'),
-        fetchJSON<AlertsResponse>(`/alerts?from=${encodeURIComponent(from)}`)
+        fetchJSON<AlertsResponse>(`/alerts?from=${encodeURIComponent(from)}`),
+        fetchJSON<BudgetsResponse>('/budgets')
       ]);
 
       const hourly = costs.breakdown as HourlyCostBreakdown[];
@@ -87,6 +91,7 @@
       uptimeSeconds = health.uptime_seconds;
       emergencyStopActive = health.emergency_stop ?? false;
       recentAlerts = alertsRes.alerts.slice(0, 5);
+      globalBudget = budgetsRes.global.limit_usd > 0 ? budgetsRes.global : null;
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : 'Failed to load overview data.';
     } finally {
@@ -190,6 +195,26 @@
     </div>
     <KPICard title="Uptime" value={formatUptime(uptimeSeconds)} subtitle="Proxy process uptime" />
   </div>
+
+  {#if globalBudget}
+    <div class="rounded-lg border border-border-default bg-surface p-4">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <p class="text-xs font-medium uppercase tracking-wider text-text-secondary">Global Budget</p>
+          <p class="mt-1 text-2xl font-semibold text-text-primary">
+            {formatUSD(globalBudget.spent_usd)} <span class="text-sm font-normal text-text-secondary">/ {formatUSD(globalBudget.limit_usd)}</span>
+          </p>
+          <p class="mt-0.5 text-xs text-text-secondary capitalize">{globalBudget.period} · {globalBudget.percentage_used.toFixed(1)}% used</p>
+        </div>
+        <div class="h-2 w-32 overflow-hidden rounded-full bg-bg-elevated">
+          <div
+            class={`h-full rounded-full transition-all ${globalBudget.percentage_used >= 90 ? 'bg-danger' : globalBudget.percentage_used >= 75 ? 'bg-warning' : 'bg-accent'}`}
+            style={`width: ${Math.min(globalBudget.percentage_used, 100)}%`}
+          ></div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if loading}
     <section class="flex h-[320px] items-center justify-center rounded-lg border border-border-default bg-surface p-4 text-sm text-text-secondary">

@@ -127,6 +127,28 @@ type Dispatcher interface {
 	Dispatch(context.Context, alert.Alert)
 }
 
+// globalBudgetState tracks cross-agent spending within a single period.
+//
+//nolint:govet // field order kept for semantic clarity: times grouped together.
+type globalBudgetState struct {
+	periodStartsAt time.Time
+	periodResetsAt time.Time
+	spentUSD       float64
+}
+
+// GlobalBudgetView is an API-friendly snapshot of global budget state.
+//
+//nolint:govet // field order kept for API clarity.
+type GlobalBudgetView struct {
+	Period         config.BudgetPeriod
+	PeriodStartsAt time.Time
+	PeriodResetsAt time.Time
+	LimitUSD       float64
+	SpentUSD       float64
+	RemainingUSD   float64
+	PercentageUsed float64
+}
+
 // BudgetManager tracks agent spend and applies budget enforcement rules.
 //
 //nolint:revive,govet // Name required by spec; field grouping aids maintainability.
@@ -147,6 +169,10 @@ type BudgetManager struct {
 	flushInterval time.Duration
 	flushStop     chan struct{}
 	flushWG       sync.WaitGroup
+
+	globalLimitUSD float64
+	globalPeriod   config.BudgetPeriod
+	globalState    globalBudgetState
 }
 
 // NewManager creates a budget manager from gate configuration.
@@ -261,6 +287,12 @@ func newManager(
 		clock = realClock{}
 	}
 
+	now := clock.Now().UTC()
+	globalPeriod := gate.GlobalBudget.Period
+	if globalPeriod == "" {
+		globalPeriod = config.BudgetPeriodMonthly
+	}
+
 	manager := &BudgetManager{
 		clock:       clock,
 		logger:      logger,
@@ -278,6 +310,12 @@ func newManager(
 			downgradeThresholdPct: gate.DowngradeThresholdPct,
 			downgradeChain:        append([]string(nil), gate.DefaultDowngradeChain...),
 			alertThresholdsPct:    append([]float64(nil), gate.AlertThresholdsPct...),
+		},
+		globalLimitUSD: gate.GlobalBudget.LimitUSD,
+		globalPeriod:   globalPeriod,
+		globalState: globalBudgetState{
+			periodStartsAt: now,
+			periodResetsAt: nextPeriodReset(now, globalPeriod),
 		},
 	}
 
@@ -373,6 +411,21 @@ func (m *BudgetManager) CheckBudgetDetailed(agent string, estimatedCostUSD float
 		}
 	}
 
+	// Check global budget before per-agent.
+	m.maybeResetGlobalPeriodLocked(now)
+	if m.globalLimitUSD > 0 && m.globalState.spentUSD+estimatedCostUSD > m.globalLimitUSD {
+		return Decision{
+			Action:   ActionReject,
+			Code:     "global_budget_exceeded",
+			Message:  fmt.Sprintf("Global budget limit of $%.2f exceeded (spent: $%.2f)", m.globalLimitUSD, m.globalState.spentUSD),
+			Agent:    normalizedAgent,
+			Period:   m.globalPeriod,
+			LimitUSD: m.globalLimitUSD,
+			SpentUSD: m.globalState.spentUSD,
+			Over:     true,
+		}
+	}
+
 	if m.registerRequestAndDetectRunawayLocked(state, now) {
 		state.killed = true
 		state.disableReason = disableReasonRunaway
@@ -462,6 +515,9 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 	state.lastSeenAt = now
 	m.maybeResetPeriodLocked(state, policy, now)
 
+	m.maybeResetGlobalPeriodLocked(now)
+	m.globalState.spentUSD += costUSD
+
 	before := percentageUsed(policy.limitUSD, state.spentUSD)
 	state.spentUSD += costUSD
 	state.dirty = true
@@ -500,6 +556,39 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 				policy.limitUSD,
 			)
 		}
+	}
+}
+
+// GetGlobalBudget returns the current global budget view.
+func (m *BudgetManager) GetGlobalBudget() GlobalBudgetView {
+	now := m.clock.Now().UTC()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.maybeResetGlobalPeriodLocked(now)
+
+	spent := m.globalState.spentUSD
+	limit := m.globalLimitUSD
+	remaining := 0.0
+	if limit > 0 {
+		remaining = limit - spent
+		if remaining < 0 {
+			remaining = 0
+		}
+	}
+	pct := 0.0
+	if limit > 0 {
+		pct = percentageUsed(limit, spent)
+	}
+	return GlobalBudgetView{
+		Period:         m.globalPeriod,
+		PeriodStartsAt: m.globalState.periodStartsAt,
+		PeriodResetsAt: m.globalState.periodResetsAt,
+		LimitUSD:       limit,
+		SpentUSD:       spent,
+		RemainingUSD:   remaining,
+		PercentageUsed: pct,
 	}
 }
 
@@ -710,6 +799,18 @@ func (m *BudgetManager) stateForAgentLocked(agent string, policy agentPolicy, no
 	m.state[agent] = state
 	m.knownAgents[agent] = struct{}{}
 	return state, true
+}
+
+func (m *BudgetManager) maybeResetGlobalPeriodLocked(now time.Time) {
+	if m.globalLimitUSD <= 0 {
+		return
+	}
+	if now.Before(m.globalState.periodResetsAt) {
+		return
+	}
+	m.globalState.spentUSD = 0
+	m.globalState.periodStartsAt = now
+	m.globalState.periodResetsAt = nextPeriodReset(now, m.globalPeriod)
 }
 
 func (m *BudgetManager) maybeResetPeriodLocked(state *agentState, policy agentPolicy, now time.Time) {

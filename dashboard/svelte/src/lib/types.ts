@@ -44,9 +44,12 @@ export interface BudgetUpdateRequest {
 
 export interface GlobalBudget {
   period: string;
+  period_starts_at: string;
+  period_resets_at: string;
   limit_usd: number;
   spent_usd: number;
   remaining_usd: number;
+  percentage_used: number;
 }
 
 export interface BudgetsResponse {

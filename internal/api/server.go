@@ -37,8 +37,6 @@ type Server struct {
 	version        string
 	storageBackend string
 	pricing        []config.PricingEntry
-	globalPeriod   config.BudgetPeriod
-	globalLimitUSD float64
 	broker         *broker
 }
 
@@ -73,8 +71,6 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 			"anthropic": providerStatus(cfg.Upstream.Anthropic.BaseURL),
 			"ollama":    providerStatus(cfg.Upstream.Ollama.BaseURL),
 		},
-		globalPeriod:   cfg.Gate.GlobalBudget.Period,
-		globalLimitUSD: cfg.Gate.GlobalBudget.LimitUSD,
 		broker: &broker{
 			clients: make(map[chan sseEvent]struct{}),
 		},
@@ -256,28 +252,22 @@ func (s *Server) handleBudgets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]map[string]any, 0, len(records))
-	globalSpent := 0.0
 	for _, record := range records {
 		view := s.budget.GetBudget(record.Name)
-		globalSpent += view.SpentUSD
 		items = append(items, encodeBudgetRecord(record, view))
 	}
 
-	globalRemaining := 0.0
-	if s.globalLimitUSD > 0 {
-		globalRemaining = s.globalLimitUSD - globalSpent
-		if globalRemaining < 0 {
-			globalRemaining = 0
-		}
-	}
-
+	gv := s.budget.GetGlobalBudget()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"budgets": items,
 		"global": map[string]any{
-			"period":        s.globalPeriod,
-			"limit_usd":     s.globalLimitUSD,
-			"spent_usd":     globalSpent,
-			"remaining_usd": globalRemaining,
+			"period":           string(gv.Period),
+			"period_starts_at": gv.PeriodStartsAt,
+			"period_resets_at": gv.PeriodResetsAt,
+			"limit_usd":        gv.LimitUSD,
+			"spent_usd":        gv.SpentUSD,
+			"remaining_usd":    gv.RemainingUSD,
+			"percentage_used":  gv.PercentageUsed,
 		},
 	})
 }

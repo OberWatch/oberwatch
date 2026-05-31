@@ -25,6 +25,7 @@ RUN apk add --no-cache ca-certificates sqlite-libs && \
     mkdir -p /data && chown oberwatch:oberwatch /data
 COPY --from=builder /app/oberwatch /usr/local/bin/oberwatch
 
+WORKDIR /data
 EXPOSE 8080
 VOLUME ["/data"]
 

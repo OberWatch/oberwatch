@@ -1359,3 +1359,126 @@ func TestBudgetViewsAndMutations(t *testing.T) {
 		t.Fatalf("ResetBudget period reset = %v, want %v", reset.PeriodResetsAt, start.Add(7*24*time.Hour))
 	}
 }
+
+func TestGlobalBudgetNotConfigured(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 0
+
+	m := NewManagerWithClock(cfg, nil, newMockClock(time.Now()))
+
+	decision := m.CheckBudgetDetailed("agent-x", 5.00)
+	if decision.Action != ActionAllow {
+		t.Fatalf("want ActionAllow when global budget not configured, got %s (code=%s)", decision.Action, decision.Code)
+	}
+}
+
+func TestGlobalBudgetUnderLimit(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 10
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	decision := m.CheckBudgetDetailed("agent-a", 5)
+	if decision.Action != ActionAllow {
+		t.Fatalf("want ActionAllow when under global limit, got %s", decision.Action)
+	}
+}
+
+func TestGlobalBudgetExceededRejectsAllAgents(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 1.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.80)
+	m.RecordSpend("agent-b", 0.25)
+
+	for _, agent := range []string{"agent-a", "agent-b", "agent-c"} {
+		d := m.CheckBudgetDetailed(agent, 0.01)
+		if d.Action != ActionReject {
+			t.Fatalf("agent %q: want ActionReject after global exceeded, got %s (code=%s)", agent, d.Action, d.Code)
+		}
+		if d.Code != "global_budget_exceeded" {
+			t.Fatalf("agent %q: want code global_budget_exceeded, got %s", agent, d.Code)
+		}
+	}
+}
+
+func TestGlobalBudgetCheckedBeforePerAgent(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 0
+	cfg.GlobalBudget.LimitUSD = 0.50
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.60)
+
+	d := m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionReject || d.Code != "global_budget_exceeded" {
+		t.Fatalf("want global_budget_exceeded before per-agent check, got action=%s code=%s", d.Action, d.Code)
+	}
+}
+
+func TestGlobalBudgetPeriodReset(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 1.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodHourly
+
+	start := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	clk := newMockClock(start)
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.90)
+	m.RecordSpend("agent-b", 0.15)
+
+	d := m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionReject {
+		t.Fatalf("want reject before period reset, got %s", d.Action)
+	}
+
+	clk.Advance(61 * time.Minute)
+
+	d = m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionAllow {
+		t.Fatalf("want allow after global period reset, got %s (code=%s)", d.Action, d.Code)
+	}
+}
+
+func TestGetGlobalBudgetView(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.GlobalBudget.LimitUSD = 5.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodMonthly
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 2.00)
+	m.RecordSpend("agent-b", 1.50)
+
+	gv := m.GetGlobalBudget()
+	if gv.LimitUSD != 5.00 {
+		t.Fatalf("limit = %v, want 5.00", gv.LimitUSD)
+	}
+	if gv.SpentUSD != 3.50 {
+		t.Fatalf("spent = %v, want 3.50", gv.SpentUSD)
+	}
+	if gv.RemainingUSD != 1.50 {
+		t.Fatalf("remaining = %v, want 1.50", gv.RemainingUSD)
+	}
+	if gv.PercentageUsed != 70.0 {
+		t.Fatalf("pct = %v, want 70.0", gv.PercentageUsed)
+	}
+	if gv.Period != config.BudgetPeriodMonthly {
+		t.Fatalf("period = %q, want monthly", gv.Period)
+	}
+}
