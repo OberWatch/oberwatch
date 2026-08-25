@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1355,6 +1356,101 @@ func TestServer_SetupLoginLogoutAndPasswordChange(t *testing.T) {
 
 	for idx, tt := range tests {
 		t.Run(string(rune('a'+idx)), tt.name)
+	}
+}
+
+func TestServer_AgentsEndpointReturnsModelUsage(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 14, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name           string
+		renameTo       string
+		wantName       string
+		costs          []storage.CostRecord
+		wantLastModel  string
+		wantModelsUsed []string
+	}{
+		{
+			name:           "configured agent without costs returns empty model values",
+			wantName:       "email-agent",
+			wantModelsUsed: []string{},
+		},
+		{
+			name:     "cost history returns deterministic latest and distinct models",
+			wantName: "email-agent",
+			costs: []storage.CostRecord{
+				{ID: "old", Agent: "email-agent", Model: "gpt-4o", Provider: "openai", CreatedAt: now.Add(-time.Minute)},
+				{ID: "tie-a", Agent: "email-agent", Model: "gpt-4o", Provider: "openai", CreatedAt: now},
+				{ID: "tie-z", Agent: "email-agent", Model: "claude-haiku-4-5", Provider: "anthropic", CreatedAt: now},
+			},
+			wantLastModel:  "claude-haiku-4-5",
+			wantModelsUsed: []string{"claude-haiku-4-5", "gpt-4o"},
+		},
+		{
+			name:     "renamed agent retains model history",
+			renameTo: "renamed-agent",
+			wantName: "renamed-agent",
+			costs: []storage.CostRecord{
+				{ID: "rename-cost", Agent: "email-agent", Model: "claude-sonnet-4-6", Provider: "anthropic", CreatedAt: now},
+			},
+			wantLastModel:  "claude-sonnet-4-6",
+			wantModelsUsed: []string{"claude-sonnet-4-6"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			seedCostRecords(t, store, tt.costs)
+			if tt.renameTo != "" {
+				if err := store.RenameAgent(context.Background(), "email-agent", tt.renameTo); err != nil {
+					t.Fatalf("RenameAgent() error = %v", err)
+				}
+			}
+			req := httptest.NewRequest(http.MethodGet, basePath+"/agents", nil)
+			addAuthenticatedSessionCookie(t, store, req)
+
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusOK)
+			}
+
+			payload := decodeJSONMap(t, recorder.Result().Body)
+			agents, ok := payload["agents"].([]any)
+			if !ok || len(agents) != 1 {
+				t.Fatalf("agents = %#v, want one agent", payload["agents"])
+			}
+			agent, ok := agents[0].(map[string]any)
+			if !ok {
+				t.Fatalf("agent type = %T, want map[string]any", agents[0])
+			}
+			if got := mustString(t, agent, "name"); got != tt.wantName {
+				t.Fatalf("name = %q, want %q", got, tt.wantName)
+			}
+			if got := mustString(t, agent, "last_model"); got != tt.wantLastModel {
+				t.Fatalf("last_model = %q, want %q", got, tt.wantLastModel)
+			}
+			models, ok := agent["models_used"].([]any)
+			if !ok {
+				t.Fatalf("models_used type = %T, want []any", agent["models_used"])
+			}
+			gotModels := make([]string, 0, len(models))
+			for _, model := range models {
+				value, ok := model.(string)
+				if !ok {
+					t.Fatalf("model type = %T, want string", model)
+				}
+				gotModels = append(gotModels, value)
+			}
+			if !reflect.DeepEqual(gotModels, tt.wantModelsUsed) {
+				t.Fatalf("models_used = %#v, want %#v", gotModels, tt.wantModelsUsed)
+			}
+		})
 	}
 }
 

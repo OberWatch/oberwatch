@@ -17,6 +17,7 @@
   type AgentRow = RowData & {
     name: string;
     status: string;
+    lastModel: string;
     spentUSD: number;
     limitUSD: number;
     usage: number;
@@ -29,6 +30,7 @@
   const columns: ColumnDef[] = [
     { key: 'name', label: 'Agent Name', sortable: true },
     { key: 'status', label: 'Status' },
+    { key: 'lastModel', label: 'Model', sortable: true },
     { key: 'spentUSD', label: 'Spend Today', sortable: true },
     { key: 'limitUSD', label: 'Budget Limit', sortable: true },
     { key: 'usage', label: 'Usage', sortable: true },
@@ -42,6 +44,7 @@
   let search = $state('');
   let rows = $state<AgentRow[]>([]);
   let agents = $state<Agent[]>([]);
+  let modelsByAgent = $state<Record<string, string[]>>({});
   let budgetsByAgent = $state<Record<string, Budget>>({});
   let actionBusyByAgent = $state<Record<string, boolean>>({});
   let proxyURL = $state('');
@@ -61,6 +64,7 @@
 
   const cellRenderers = $derived.by<Record<string, Snippet<[RowData]>>>(() => ({
     status: statusCell,
+    lastModel: modelCell,
     spentUSD: spentCell,
     limitUSD: limitCell,
     usage: usageCell,
@@ -104,6 +108,9 @@
       ]);
 
       agents = agentsRes.agents;
+      modelsByAgent = Object.fromEntries(
+        agentsRes.agents.map((agent: Agent) => [agent.name, agent.models_used])
+      );
       const budgetMap = Object.fromEntries(
         budgetsRes.budgets.map((budget: Budget) => [budget.agent, budget])
       );
@@ -119,6 +126,7 @@
         return {
           name: agent.name,
           status,
+          lastModel: agent.last_model,
           spentUSD,
           limitUSD,
           usage,
@@ -215,6 +223,26 @@
 {#snippet statusCell(raw: RowData)}
   {@const row = raw as AgentRow}
   <StatusBadge status={toBadgeStatus(row.status)} />
+{/snippet}
+
+{#snippet modelCell(raw: RowData)}
+  {@const row = raw as AgentRow}
+  {@const modelsUsed = modelsByAgent[row.name] ?? []}
+  <div class="font-mono text-[13px]">
+    <span class:text-text-muted={!row.lastModel}>{row.lastModel || '—'}</span>
+    {#if modelsUsed.length > 1}
+      <details class="mt-1 text-xs text-text-secondary">
+        <summary class="w-fit cursor-pointer rounded-sm text-accent focus:outline-none focus:ring-2 focus:ring-accent">
+          All {modelsUsed.length} models
+        </summary>
+        <ul class="mt-1 space-y-1" aria-label={`Models used by ${row.name}`}>
+          {#each modelsUsed as model}
+            <li>{model}</li>
+          {/each}
+        </ul>
+      </details>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet spentCell(raw: RowData)}
