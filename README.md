@@ -241,7 +241,7 @@ Oberwatch publishes images across two registries with different intent.
 | `sha-<commit>` | GHCR | Immutable branch build for debugging and verification |
 
 Recommended usage:
-- Production: `oberwatch/oberwatch:0.1.1` or `oberwatch/oberwatch:latest`
+- Production: `kaissb/oberwatch:0.1.1` or `kaissb/oberwatch:latest`
 - Preview testing: `ghcr.io/oberwatch/oberwatch:beta`
 - Staging environments: `ghcr.io/oberwatch/oberwatch:staging`
 
