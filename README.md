@@ -68,7 +68,7 @@ Agent SDK / app
 
 ## Quick Start
 
-### One-line install (Linux/macOS)
+### One-line install (Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OberWatch/oberwatch/main/scripts/install.sh | sh
