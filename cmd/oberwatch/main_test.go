@@ -577,6 +577,38 @@ func TestVersionCommandAndGlobalVersionFlag(t *testing.T) {
 	}
 }
 
+func TestSourceBuildCLIProductVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "global version flag", args: []string{"--version"}},
+		{name: "version command", args: []string{"version"}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := newRootCmd()
+			var stdout bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&bytes.Buffer{})
+			root.SetArgs(tt.args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if got, want := strings.SplitN(stdout.String(), "\n", 2)[0], "oberwatch v0.1.1"; got != want {
+				t.Fatalf("version line = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestDisplayVersion_IgnoresChannel(t *testing.T) {
 	originalVersion := version
 	originalChannel := channel

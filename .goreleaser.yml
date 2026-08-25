@@ -10,9 +10,9 @@ builds:
     goarch: [amd64]
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
+      - -X main.version=v{{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.built={{.Date}}
 
   - id: oberwatch-linux-arm64
     main: ./cmd/oberwatch
@@ -24,9 +24,9 @@ builds:
     goarch: [arm64]
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
+      - -X main.version=v{{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.built={{.Date}}
 
 archives:
   - id: default

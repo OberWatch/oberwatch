@@ -55,7 +55,7 @@ type sseEvent struct {
 // New builds a management API server.
 func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.Store, version string) *Server {
 	if strings.TrimSpace(version) == "" {
-		version = "0.1.0"
+		version = "0.1.1"
 	}
 
 	server := &Server{
