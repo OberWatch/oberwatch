@@ -532,11 +532,15 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	requestsByAgent := make(map[string]int, len(rawCosts))
 	costByAgent := make(map[string]float64, len(rawCosts))
 	lastSeenByAgent := make(map[string]time.Time, len(rawCosts))
+	modelsByAgent := make(map[string][]string)
+	seenModelsByAgent := make(map[string]map[string]struct{})
 
 	//nolint:govet // Keep summary fields grouped to mirror /agents response.
 	type agentSummary struct {
 		Name          string
 		Status        string
+		LastModel     string
+		ModelsUsed    []string
 		TotalRequests int
 		TotalCostUSD  float64
 		LastSeenAt    time.Time
@@ -552,6 +556,23 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	for index := len(rawCosts) - 1; index >= 0; index-- {
+		row := rawCosts[index]
+		model := strings.TrimSpace(row.Model)
+		if model == "" {
+			continue
+		}
+		seen := seenModelsByAgent[row.Agent]
+		if seen == nil {
+			seen = make(map[string]struct{})
+			seenModelsByAgent[row.Agent] = seen
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		modelsByAgent[row.Agent] = append(modelsByAgent[row.Agent], model)
+	}
 
 	summaries := make([]agentSummary, 0, len(records))
 	for _, record := range records {
@@ -566,9 +587,19 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		if seen := lastSeenByAgent[record.Name]; seen.After(lastSeen) {
 			lastSeen = seen
 		}
+		modelsUsed := modelsByAgent[record.Name]
+		if modelsUsed == nil {
+			modelsUsed = make([]string, 0)
+		}
+		lastModel := ""
+		if len(modelsUsed) > 0 {
+			lastModel = modelsUsed[0]
+		}
 		summaries = append(summaries, agentSummary{
 			Name:          record.Name,
 			Status:        view.Status,
+			LastModel:     lastModel,
+			ModelsUsed:    modelsUsed,
 			TotalRequests: requestsByAgent[record.Name],
 			TotalCostUSD:  costByAgent[record.Name],
 			LastSeenAt:    lastSeen,
@@ -585,6 +616,8 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, map[string]any{
 			"name":           entry.Name,
 			"status":         entry.Status,
+			"last_model":     entry.LastModel,
+			"models_used":    entry.ModelsUsed,
 			"total_requests": entry.TotalRequests,
 			"total_cost_usd": entry.TotalCostUSD,
 			"last_seen_at":   lastSeen,

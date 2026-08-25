@@ -276,7 +276,7 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 			SELECT agent, model, provider, created_at AS bucket,
 				1 AS requests, input_tokens, output_tokens, cost_usd
 			FROM cost_records` + whereSQL + `
-			ORDER BY created_at ASC
+			ORDER BY ` + normalizedCreatedAt + ` ASC, id ASC
 		`
 	case "agent":
 		statement = `
