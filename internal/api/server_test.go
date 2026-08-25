@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/pricing"
+	oberproxy "github.com/OberWatch/oberwatch/internal/proxy"
 	"github.com/OberWatch/oberwatch/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -691,6 +694,8 @@ func TestServer_CostFiltering(t *testing.T) {
 				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.20, CreatedAt: now},
 				{Agent: "agent-a", Model: "gpt-4o-mini", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.05, CreatedAt: now},
 				{Agent: "agent-b", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.30, CreatedAt: now},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.40, CreatedAt: now.Add(-2 * time.Hour)},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.50, CreatedAt: now.Add(2 * time.Hour)},
 			})
 
 			req := httptest.NewRequest(http.MethodGet, basePath+"/costs"+tt.query, nil)
@@ -709,6 +714,382 @@ func TestServer_CostFiltering(t *testing.T) {
 			totalUSD := mustFloat(t, payload, "total_usd")
 			if totalUSD != tt.wantCost {
 				t.Fatalf("total_usd = %v, want %v", totalUSD, tt.wantCost)
+			}
+		})
+	}
+}
+
+func TestServer_CostQueryValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "unsupported grouping is a client error", path: basePath + "/costs?group_by=provider"},
+		{name: "unsupported grouping is a client error for export", path: basePath + "/costs/export?group_by=provider"},
+		{name: "reversed range is a client error for costs", path: basePath + "/costs?from=2026-03-27T00:00:00Z&to=2026-03-26T00:00:00Z"},
+		{name: "reversed range is a client error for export", path: basePath + "/costs/export?from=2026-03-27T00:00:00Z&to=2026-03-26T00:00:00Z"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestParseCostQuery_GroupByCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		groupBy     string
+		wantGroupBy string
+	}{
+		{name: "mixed case agent is normalized", groupBy: "%20Agent%20", wantGroupBy: "agent"},
+		{name: "uppercase agent is normalized", groupBy: "AGENT", wantGroupBy: "agent"},
+		{name: "legacy none remains supported", groupBy: "none", wantGroupBy: "none"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, basePath+"/costs?group_by="+tt.groupBy, nil)
+			query, err := parseCostQuery(req)
+			if err != nil {
+				t.Fatalf("parseCostQuery() error = %v", err)
+			}
+			if query.GroupBy != tt.wantGroupBy {
+				t.Fatalf("GroupBy = %q, want %q", query.GroupBy, tt.wantGroupBy)
+			}
+		})
+	}
+}
+
+func TestServer_CostExportContract(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "exports grouped agents with persisted or ambiguous providers",
+			path: basePath + "/costs/export?group_by=agent",
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"agent-a,,,2,30,15,0.30000000\n" +
+				"agent-b,,openai,1,30,15,0.30000000\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			seedCostRecords(t, store, []storage.CostRecord{
+				{Agent: "agent-a", Model: "shared", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.1, CreatedAt: time.Now().UTC()},
+				{Agent: "agent-a", Model: "shared", Provider: "anthropic", InputTokens: 20, OutputTokens: 10, CostUSD: 0.2, CreatedAt: time.Now().UTC()},
+				{Agent: "agent-b", Model: "unique", Provider: "openai", InputTokens: 30, OutputTokens: 15, CostUSD: 0.3, CreatedAt: time.Now().UTC()},
+			})
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+
+			response := recorder.Result()
+			defer func() { _ = response.Body.Close() }()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", response.StatusCode, http.StatusOK)
+			}
+			if response.Header.Get("Content-Type") != "text/csv" {
+				t.Fatalf("Content-Type = %q, want text/csv", response.Header.Get("Content-Type"))
+			}
+			if response.Header.Get("Content-Disposition") != `attachment; filename="costs.csv"` {
+				t.Fatalf("Content-Disposition = %q, want attachment", response.Header.Get("Content-Disposition"))
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("ReadAll() error = %v", err)
+			}
+			if string(body) != tt.want {
+				t.Fatalf("CSV body = %q, want %q", string(body), tt.want)
+			}
+		})
+	}
+}
+
+func TestServer_CostExportFiltering(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "export excludes matching records before and after time range",
+			path: basePath + "/costs/export?agent=agent-a&model=gpt-4o&group_by=none&from=" +
+				base.Add(-time.Hour).Format(time.RFC3339) + "&to=" + base.Add(time.Hour).Format(time.RFC3339),
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"agent-a,gpt-4o,openai,1,10,5,0.20000000\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			seedCostRecords(t, store, []storage.CostRecord{
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.1, CreatedAt: base.Add(-2 * time.Hour)},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.2, CreatedAt: base},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.3, CreatedAt: base.Add(2 * time.Hour)},
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusOK)
+			}
+			if recorder.Body.String() != tt.want {
+				t.Fatalf("CSV body = %q, want %q", recorder.Body.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestServer_ProxyCostPersistenceAndExportIntegration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+	}{
+		{name: "real proxy requests retain agent and provider attribution through filters and export"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			openAIUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(`{"id":"openai-response","usage":{"prompt_tokens":100,"completion_tokens":50}}`))
+				if err != nil {
+					t.Errorf("openai upstream Write() error = %v", err)
+				}
+			}))
+			t.Cleanup(openAIUpstream.Close)
+			anthropicUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(`{"id":"anthropic-response","usage":{"input_tokens":20,"output_tokens":10}}`))
+				if err != nil {
+					t.Errorf("anthropic upstream Write() error = %v", err)
+				}
+			}))
+			t.Cleanup(anthropicUpstream.Close)
+
+			cfg := config.DefaultConfig()
+			cfg.Upstream.OpenAI.BaseURL = openAIUpstream.URL
+			cfg.Upstream.Anthropic.BaseURL = anthropicUpstream.URL
+			cfg.Upstream.DefaultProvider = config.ProviderOpenAI
+
+			store, storeErr := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "proxy-cost-integration.db"), 0, nil)
+			if storeErr != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", storeErr)
+			}
+			t.Cleanup(func() {
+				if closeErr := store.Close(); closeErr != nil {
+					t.Errorf("Close() error = %v", closeErr)
+				}
+			})
+			manager, managerErr := budget.NewPersistentManager(cfg.Gate, nil, store)
+			if managerErr != nil {
+				t.Fatalf("NewPersistentManager() error = %v", managerErr)
+			}
+			t.Cleanup(func() {
+				if closeErr := manager.Close(); closeErr != nil {
+					t.Errorf("BudgetManager.Close() error = %v", closeErr)
+				}
+			})
+
+			management := New(cfg, manager, store, "test")
+			var sinkErr error
+			costSink := sinkFunc(func(record storage.CostRecord) {
+				if saveErr := store.SaveCostRecord(context.Background(), record); saveErr != nil {
+					sinkErr = saveErr
+				}
+			})
+			proxyHandler, proxyErr := oberproxy.New(cfg, oberproxy.Hooks{
+				Budget:     manager,
+				Pricing:    pricing.NewPricingTableFromConfig(cfg.Pricing, nil),
+				CostSink:   costSink,
+				Management: management,
+			})
+			if proxyErr != nil {
+				t.Fatalf("proxy.New() error = %v", proxyErr)
+			}
+			proxyServer := httptest.NewServer(proxyHandler)
+			t.Cleanup(proxyServer.Close)
+
+			proxyRequests := []struct {
+				name     string
+				agent    string
+				path     string
+				body     string
+				model    string
+				provider string
+			}{
+				{name: "openai agent request", agent: "agent-openai", path: "/v1/chat/completions", body: `{"model":"gpt-4o","messages":[]}`, model: "gpt-4o", provider: "openai"},
+				{name: "anthropic agent request", agent: "agent-anthropic", path: "/v1/messages", body: `{"model":"claude-haiku-4-5","messages":[]}`, model: "claude-haiku-4-5", provider: "anthropic"},
+			}
+			for _, requestCase := range proxyRequests {
+				requestCase := requestCase
+				t.Run(requestCase.name, func(t *testing.T) {
+					req, err := http.NewRequest(http.MethodPost, proxyServer.URL+requestCase.path, strings.NewReader(requestCase.body))
+					if err != nil {
+						t.Fatalf("NewRequest() error = %v", err)
+					}
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("X-Oberwatch-Agent", requestCase.agent)
+					response, err := proxyServer.Client().Do(req)
+					if err != nil {
+						t.Fatalf("Do() error = %v", err)
+					}
+					body, err := io.ReadAll(response.Body)
+					if closeErr := response.Body.Close(); closeErr != nil {
+						t.Errorf("response Body.Close() error = %v", closeErr)
+					}
+					if err != nil {
+						t.Fatalf("ReadAll() error = %v", err)
+					}
+					if response.StatusCode != http.StatusOK {
+						t.Fatalf("status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+					}
+				})
+			}
+			if sinkErr != nil {
+				t.Fatalf("SaveCostRecord() error = %v", sinkErr)
+			}
+
+			token := seedSession(t, store, time.Now().UTC().Add(time.Hour))
+			for _, requestCase := range proxyRequests {
+				filterURL := proxyServer.URL + basePath + "/costs?agent=" + requestCase.agent + "&group_by=none"
+				req, err := http.NewRequest(http.MethodGet, filterURL, nil)
+				if err != nil {
+					t.Fatalf("NewRequest(cost filter) error = %v", err)
+				}
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+				response, err := proxyServer.Client().Do(req)
+				if err != nil {
+					t.Fatalf("Do(cost filter) error = %v", err)
+				}
+				payload := decodeJSONMap(t, response.Body)
+				if closeErr := response.Body.Close(); closeErr != nil {
+					t.Errorf("cost filter Body.Close() error = %v", closeErr)
+				}
+				if got := mustFloat(t, payload, "total_requests"); got != 1 {
+					t.Fatalf("filtered total_requests for %s = %v, want 1", requestCase.agent, got)
+				}
+			}
+
+			exportReq, err := http.NewRequest(http.MethodGet, proxyServer.URL+basePath+"/costs/export?group_by=none", nil)
+			if err != nil {
+				t.Fatalf("NewRequest(export) error = %v", err)
+			}
+			exportReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+			exportResponse, err := proxyServer.Client().Do(exportReq)
+			if err != nil {
+				t.Fatalf("Do(export) error = %v", err)
+			}
+			exportBody, err := io.ReadAll(exportResponse.Body)
+			if closeErr := exportResponse.Body.Close(); closeErr != nil {
+				t.Errorf("export Body.Close() error = %v", closeErr)
+			}
+			if err != nil {
+				t.Fatalf("ReadAll(export) error = %v", err)
+			}
+			if exportResponse.StatusCode != http.StatusOK {
+				t.Fatalf("export status = %d, want %d", exportResponse.StatusCode, http.StatusOK)
+			}
+			csvRows, err := csv.NewReader(strings.NewReader(string(exportBody))).ReadAll()
+			if err != nil {
+				t.Fatalf("CSV ReadAll() error = %v", err)
+			}
+			if len(csvRows) != len(proxyRequests)+1 {
+				t.Fatalf("CSV row count = %d, want %d; CSV = %q", len(csvRows), len(proxyRequests)+1, exportBody)
+			}
+			attributionByAgent := make(map[string][]string, len(csvRows)-1)
+			for _, row := range csvRows[1:] {
+				if len(row) != 7 {
+					t.Fatalf("CSV row = %#v, want 7 columns", row)
+				}
+				attributionByAgent[row[0]] = row
+			}
+			for _, requestCase := range proxyRequests {
+				row, ok := attributionByAgent[requestCase.agent]
+				if !ok || row[1] != requestCase.model || row[2] != requestCase.provider {
+					t.Fatalf("CSV row for %q = %#v, want model %q and provider %q; CSV = %q", requestCase.agent, row, requestCase.model, requestCase.provider, exportBody)
+				}
+			}
+		})
+	}
+}
+
+func TestServer_EmptyCosts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "default grouping returns numeric zeros and empty breakdown", path: basePath + "/costs?agent=missing"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusOK)
+			}
+
+			payload := decodeJSONMap(t, recorder.Result().Body)
+			for _, key := range []string{"total_usd", "total_requests", "total_input_tokens", "total_output_tokens"} {
+				if got := mustFloat(t, payload, key); got != 0 {
+					t.Fatalf("%s = %v, want 0", key, got)
+				}
+			}
+			breakdown, ok := payload["breakdown"].([]any)
+			if !ok || len(breakdown) != 0 {
+				t.Fatalf("breakdown = %#v, want empty array", payload["breakdown"])
 			}
 		})
 	}

@@ -57,7 +57,7 @@ type CostRecord struct {
 type CostQuery struct {
 	Agent   string
 	Model   string
-	GroupBy string // "", "agent", "model", "hour", "day"
+	GroupBy string // "", "agent", "model", "hour", "day", or legacy "none"
 	From    time.Time
 	To      time.Time
 }
@@ -66,6 +66,7 @@ type CostQuery struct {
 type CostAggregate struct {
 	Agent        string
 	Model        string
+	Provider     string
 	Bucket       string
 	Requests     int
 	InputTokens  int

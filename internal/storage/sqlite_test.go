@@ -136,6 +136,153 @@ func TestSQLiteStore_SaveAndQueryCosts(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_QueryCostsFractionalSecondBoundaries(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+	second := time.Date(2026, time.March, 26, 10, 0, 0, 0, time.UTC)
+	oneNanosecond := second.Add(time.Nanosecond)
+	for _, record := range []CostRecord{
+		{ID: "whole-second", Agent: "agent", Model: "model", CreatedAt: second},
+		{ID: "one-nanosecond", Agent: "agent", Model: "model", CreatedAt: oneNanosecond},
+	} {
+		if err := store.SaveCostRecord(ctx, record); err != nil {
+			t.Fatalf("SaveCostRecord() error = %v", err)
+		}
+	}
+
+	tests := []struct {
+		query CostQuery
+		name  string
+	}{
+		{name: "from whole second includes equal and fractional records", query: CostQuery{From: second}},
+		{name: "to one nanosecond includes whole and equal records", query: CostQuery{To: oneNanosecond}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := store.QueryCosts(ctx, tt.query)
+			if err != nil {
+				t.Fatalf("QueryCosts() error = %v", err)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("len(QueryCosts()) = %d, want 2; rows = %#v", len(rows), rows)
+			}
+		})
+	}
+}
+
+func TestFormatCostAggregatesCSV_Contract(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want string
+		rows []CostAggregate
+	}{
+		{
+			name: "writes exact header and provider without bucket",
+			rows: []CostAggregate{{
+				Agent: "agent-a", Model: "gpt-4o", Provider: "openai", Requests: 1,
+				InputTokens: 10, OutputTokens: 5, CostUSD: 0.125,
+			}},
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\nagent-a,gpt-4o,openai,1,10,5,0.12500000\n",
+		},
+		{
+			name: "neutralizes spreadsheet formulas in text fields only",
+			rows: []CostAggregate{
+				{Agent: "=cmd", Model: "+model", Provider: "-provider", Requests: -1, InputTokens: -2, OutputTokens: -3, CostUSD: -0.5},
+				{Agent: "@agent", Model: "safe", Provider: "openai", Requests: 1, InputTokens: 2, OutputTokens: 3, CostUSD: 0.5},
+			},
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"'=cmd,'+model,'-provider,-1,-2,-3,-0.50000000\n" +
+				"'@agent,safe,openai,1,2,3,0.50000000\n",
+		},
+		{
+			name: "neutralizes leading tabs in text fields",
+			rows: []CostAggregate{{
+				Agent: "	agent", Model: "	model", Provider: "	provider", Requests: 1,
+			}},
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"'	agent,'	model,'	provider,1,0,0,0.00000000\n",
+		},
+		{
+			name: "neutralizes leading carriage returns in text fields",
+			rows: []CostAggregate{{
+				Agent: "\ragent", Model: "\rmodel", Provider: "\rprovider", Requests: 1,
+			}},
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"\"'\ragent\",\"'\rmodel\",\"'\rprovider\",1,0,0,0.00000000\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := FormatCostAggregatesCSV(tt.rows)
+			if err != nil {
+				t.Fatalf("FormatCostAggregatesCSV() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("FormatCostAggregatesCSV() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSQLiteStore_CostAggregateProvider(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+	now := time.Date(2026, time.March, 26, 10, 15, 0, 0, time.UTC)
+	records := []CostRecord{
+		{ID: "provider-1", Agent: "agent-a", Model: "shared", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.1, CreatedAt: now},
+		{ID: "provider-2", Agent: "agent-a", Model: "shared", Provider: "anthropic", InputTokens: 20, OutputTokens: 10, CostUSD: 0.2, CreatedAt: now},
+		{ID: "provider-3", Agent: "agent-b", Model: "unique", Provider: "openai", InputTokens: 30, OutputTokens: 15, CostUSD: 0.3, CreatedAt: now},
+	}
+	for _, record := range records {
+		if err := store.SaveCostRecord(ctx, record); err != nil {
+			t.Fatalf("SaveCostRecord() error = %v", err)
+		}
+	}
+
+	tests := []struct {
+		name         string
+		query        CostQuery
+		wantProvider string
+	}{
+		{name: "single provider aggregate preserves provider", query: CostQuery{Agent: "agent-b", GroupBy: "agent"}, wantProvider: "openai"},
+		{name: "multi provider aggregate leaves provider blank", query: CostQuery{Agent: "agent-a", GroupBy: "agent"}, wantProvider: ""},
+		{name: "model aggregate preserves its only provider", query: CostQuery{Model: "unique", GroupBy: "model"}, wantProvider: "openai"},
+		{name: "hour aggregate across providers leaves provider blank", query: CostQuery{GroupBy: "hour"}, wantProvider: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := store.QueryCosts(ctx, tt.query)
+			if err != nil {
+				t.Fatalf("QueryCosts() error = %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("len(QueryCosts()) = %d, want 1", len(rows))
+			}
+			if rows[0].Provider != tt.wantProvider {
+				t.Fatalf("Provider = %q, want %q", rows[0].Provider, tt.wantProvider)
+			}
+		})
+	}
+}
+
 func TestSQLiteStore_AgentLifecycle(t *testing.T) {
 	t.Parallel()
 
