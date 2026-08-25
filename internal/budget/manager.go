@@ -159,16 +159,17 @@ type BudgetManager struct {
 	store        storage.Store
 	defaultState agentPolicy
 
-	mu            sync.RWMutex
-	agentPolicy   map[string]agentPolicy
-	state         map[string]*agentState
-	apiKeyMap     []config.APIKeyMapEntry
-	runaway       config.RunawayConfig
-	emergency     bool
-	knownAgents   map[string]struct{}
-	flushInterval time.Duration
-	flushStop     chan struct{}
-	flushWG       sync.WaitGroup
+	mu                   sync.RWMutex
+	agentPolicy          map[string]agentPolicy
+	state                map[string]*agentState
+	identificationMethod config.IdentificationMethod
+	apiKeyMap            []config.APIKeyMapEntry
+	runaway              config.RunawayConfig
+	emergency            bool
+	knownAgents          map[string]struct{}
+	flushInterval        time.Duration
+	flushStop            chan struct{}
+	flushWG              sync.WaitGroup
 
 	globalLimitUSD float64
 	globalPeriod   config.BudgetPeriod
@@ -294,15 +295,16 @@ func newManager(
 	}
 
 	manager := &BudgetManager{
-		clock:       clock,
-		logger:      logger,
-		dispatcher:  dispatcher,
-		store:       store,
-		agentPolicy: make(map[string]agentPolicy),
-		state:       make(map[string]*agentState),
-		apiKeyMap:   append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
-		knownAgents: make(map[string]struct{}),
-		runaway:     gate.Runaway,
+		clock:                clock,
+		logger:               logger,
+		dispatcher:           dispatcher,
+		store:                store,
+		agentPolicy:          make(map[string]agentPolicy),
+		state:                make(map[string]*agentState),
+		identificationMethod: gate.Identification.Method,
+		apiKeyMap:            append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
+		knownAgents:          make(map[string]struct{}),
+		runaway:              gate.Runaway,
 		defaultState: agentPolicy{
 			period:                gate.DefaultBudget.Period,
 			actionOnExceed:        gate.DefaultBudget.ActionOnExceed,
@@ -342,30 +344,60 @@ func newManager(
 	return manager, nil
 }
 
-// IdentifyAgent returns the calling agent by header, API key mapping, then "unknown".
+// IdentifyAgent returns the calling agent according to the configured identification method.
 func (m *BudgetManager) IdentifyAgent(request *http.Request) string {
 	if request == nil {
 		return unknownAgent
 	}
 
-	if headerAgent := strings.TrimSpace(request.Header.Get("X-Oberwatch-Agent")); headerAgent != "" {
+	headerAgent := strings.TrimSpace(request.Header.Get("X-Oberwatch-Agent"))
+	if m.identificationMethod == config.IdentificationMethodHeader {
+		if headerAgent == "" {
+			return unknownAgent
+		}
+		return headerAgent
+	}
+	if m.identificationMethod == config.IdentificationMethodSourceIP {
+		// Source-IP identification is not implemented yet; preserve the legacy header-then-credential behavior.
+		if headerAgent != "" {
+			return headerAgent
+		}
+		apiKey := extractAPIKey(request)
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(request.Header.Get("x-api-key"))
+		}
+		for _, mapping := range m.apiKeyMap {
+			prefix := strings.TrimSpace(mapping.APIKeyPrefix)
+			agent := strings.TrimSpace(mapping.Agent)
+			if prefix != "" && agent != "" && strings.HasPrefix(apiKey, prefix) {
+				return agent
+			}
+		}
+		return unknownAgent
+	}
+	if m.identificationMethod != config.IdentificationMethodAPIKey {
+		return unknownAgent
+	}
+	if headerAgent != "" {
 		return headerAgent
 	}
 
 	apiKey := extractAPIKey(request)
-	if apiKey != "" {
-		for _, mapping := range m.apiKeyMap {
-			prefix := strings.TrimSpace(mapping.APIKeyPrefix)
-			if prefix == "" {
-				continue
-			}
-			if strings.HasPrefix(apiKey, prefix) {
-				agent := strings.TrimSpace(mapping.Agent)
-				if agent != "" {
-					return agent
-				}
-			}
+	matchedAgent := ""
+	matchedPrefixLength := 0
+	for _, mapping := range m.apiKeyMap {
+		prefix := strings.TrimSpace(mapping.APIKeyPrefix)
+		agent := strings.TrimSpace(mapping.Agent)
+		if prefix == "" || agent == "" || len(prefix) <= matchedPrefixLength {
+			continue
 		}
+		if strings.HasPrefix(apiKey, prefix) {
+			matchedAgent = agent
+			matchedPrefixLength = len(prefix)
+		}
+	}
+	if matchedAgent != "" {
+		return matchedAgent
 	}
 
 	return unknownAgent
@@ -910,14 +942,12 @@ func extractAPIKey(request *http.Request) string {
 	}
 
 	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
-	if authorization != "" {
-		parts := strings.Fields(authorization)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			return strings.TrimSpace(parts[1])
-		}
+	parts := strings.Fields(authorization)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		return strings.TrimSpace(parts[1])
 	}
 
-	return strings.TrimSpace(request.Header.Get("x-api-key"))
+	return ""
 }
 
 func (m *BudgetManager) dispatchAlerts(events []alert.Alert) {
