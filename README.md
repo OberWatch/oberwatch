@@ -78,10 +78,10 @@ Then open `http://localhost:8080` to complete setup.
 ### Docker
 
 ```bash
-docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:beta
+docker run -d --name oberwatch -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:beta
 ```
 
-For preview testing, use the beta channel instead of the staging channel:
+The container starts without a config file and stores `./oberwatch.db` in the named `/data` volume, so data survives container replacement. Open `http://localhost:8080` to complete setup. No admin token is required; first-run setup creates the admin account and starts a cookie-backed session.
 
 
 ### Docker Compose (for Enterprise Edition)
@@ -125,7 +125,7 @@ Oberwatch is designed to boot cleanly on a fresh machine or hosted platform.
 4. Sign in.
 5. Point agents at the proxy URL shown by Oberwatch.
 
-Management auth is session-based. After setup, the dashboard and management API use secure cookies instead of a shared dashboard token.
+Management auth is session-based. After setup, the dashboard and management API use secure cookies instead of a shared dashboard token; no admin token is required.
 
 ## Pointing Agents At Oberwatch
 

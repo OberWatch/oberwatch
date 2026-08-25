@@ -72,8 +72,10 @@ Data lives in `~/.oberwatch/data/oberwatch.db` by default.
 Always use a named volume. Without `-v`, data is lost on container removal:
 
 ```bash
-docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
+docker run -d --name oberwatch -p 127.0.0.1:8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
 ```
+
+The container starts without a config file and writes `./oberwatch.db` under `/data`. No admin token is required; open the dashboard to create the admin account and start a cookie-backed session.
 
 ## Backups
 
@@ -103,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/OberWatch/oberwatch/main/scripts/in
 ```bash
 docker pull ghcr.io/oberwatch/oberwatch:latest
 docker stop oberwatch && docker rm oberwatch
-docker run -d -p 8080:8080 -v oberwatch-data:/data --name oberwatch ghcr.io/oberwatch/oberwatch:latest
+docker run -d --name oberwatch -p 127.0.0.1:8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest
 ```
 
 ## Resource Requirements
