@@ -28,6 +28,8 @@ COPY --from=builder /app/oberwatch /usr/local/bin/oberwatch
 WORKDIR /data
 EXPOSE 8080
 VOLUME ["/data"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
+    CMD wget -q -T 2 -O /dev/null http://127.0.0.1:8080/_oberwatch/api/v1/health || exit 1
 
 USER oberwatch
 ENTRYPOINT ["oberwatch"]
