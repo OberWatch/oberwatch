@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run onboarding wizard with admin account creation
 - Session-based authentication with 24h expiry and password change
 - Built-in model pricing tables for OpenAI, Anthropic, and Google models
-- One-line install script for Linux and macOS with systemd service setup
+- One-line install script for Linux with systemd service setup
 - Docker support with named volume persistence
 - Docker Compose template with commented enterprise service placeholders
 - GHCR image publishing: beta (from main), staging (from staging branch)
