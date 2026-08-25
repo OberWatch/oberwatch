@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-25
+
+### Added
+- Model downgrade response headers (`X-Oberwatch-Downgraded` and `X-Oberwatch-Original-Model`)
+- Built-in default downgrade chains for OpenAI, Anthropic, and Google/Gemini models
+- Global budget cap enforcement across all agents
+- In-flight SSE token counting with delta-content fallback
+- Agent identification through configured API key mappings
+- Complete cost query filtering and CSV export contract
+
+### Fixed
+- Portable, upgrade-safe Linux installer behavior
+- Docker image startup and health-check verification
+
 ## [0.1.0] - 2026-03-30
 
 ### Added
@@ -26,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run onboarding wizard with admin account creation
 - Session-based authentication with 24h expiry and password change
 - Built-in model pricing tables for OpenAI, Anthropic, and Google models
-- One-line install script for Linux and macOS with systemd service setup
+- One-line install script for Linux with systemd service setup
 - Docker support with named volume persistence
 - Docker Compose template with commented enterprise service placeholders
 - GHCR image publishing: beta (from main), staging (from staging branch)

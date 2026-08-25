@@ -1,9 +1,9 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 REPO_OWNER="OberWatch"
 REPO_NAME="oberwatch"
-API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+LATEST_RELEASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest"
 RAW_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main"
 INSTALL_PATH="/usr/local/bin/oberwatch"
 SERVICE_NAME="oberwatch"
@@ -34,6 +34,13 @@ fail() {
   exit 1
 }
 
+print_usage() {
+  printf '%s\n' \
+    'Usage: install.sh [--help]' \
+    '' \
+    'Install or upgrade Oberwatch on Linux.'
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
@@ -48,11 +55,15 @@ sudo_cmd() {
 }
 
 prompt_yes_no() {
-  local prompt="$1"
-  local reply
-  printf '%s' "$prompt"
-  read -r reply || true
-  case "${reply}" in
+  prompt_yes_no_prompt="$1"
+  prompt_yes_no_reply=""
+  prompt_yes_no_input_path="${2:-/dev/tty}"
+  printf '%s' "$prompt_yes_no_prompt"
+  if ! IFS= read -r prompt_yes_no_reply <"${prompt_yes_no_input_path}"; then
+    printf '\nRefusing upgrade: cannot confirm upgrade without a terminal.\n' >&2
+    return 2
+  fi
+  case "${prompt_yes_no_reply}" in
     y|Y|yes|YES)
       return 0
       ;;
@@ -77,8 +88,8 @@ resolve_user_home() {
 }
 
 write_default_config() {
-  local target="$1"
-  cat >"${target}" <<'CONFIG'
+  write_default_config_target="$1"
+  cat >"${write_default_config_target}" <<'CONFIG'
 # =============================================================================
 # Oberwatch Example Configuration
 # =============================================================================
@@ -323,62 +334,126 @@ CONFIG
 }
 
 detect_platform() {
-  local os arch uname_os uname_arch
-  uname_os="$(uname -s)"
-  uname_arch="$(uname -m)"
+  detect_platform_os=""
+  detect_platform_arch=""
+  detect_platform_uname_os="$(uname -s)"
+  detect_platform_uname_arch="$(uname -m)"
 
-  case "${uname_os}" in
+  case "${detect_platform_uname_os}" in
     Linux)
-      os="linux"
+      detect_platform_os="linux"
       ;;
     Darwin)
-      os="darwin"
+      detect_platform_os="darwin"
       ;;
     *)
-      fail "unsupported operating system: ${uname_os}. Oberwatch installer currently supports Linux and macOS only."
+      fail "unsupported operating system: ${detect_platform_uname_os}. Oberwatch installer currently supports Linux only."
       ;;
   esac
 
-  case "${uname_arch}" in
+  case "${detect_platform_uname_arch}" in
     x86_64|amd64)
-      arch="amd64"
+      detect_platform_arch="amd64"
       ;;
     arm64|aarch64)
-      arch="arm64"
+      detect_platform_arch="arm64"
       ;;
     i386|i686|x86)
-      fail "unsupported architecture: ${uname_arch}. 32-bit platforms are not supported."
+      fail "unsupported architecture: ${detect_platform_uname_arch}. 32-bit platforms are not supported."
       ;;
     *)
-      fail "unsupported architecture: ${uname_arch}. Supported architectures are amd64 and arm64."
+      fail "unsupported architecture: ${detect_platform_uname_arch}. Supported architectures are amd64 and arm64."
       ;;
   esac
 
-  RELEASE_OS="${os}"
-  RELEASE_ARCH="${arch}"
+  RELEASE_OS="${detect_platform_os}"
+  RELEASE_ARCH="${detect_platform_arch}"
+}
+
+validate_release_tag() {
+  validate_release_tag_value="$1"
+  case "${validate_release_tag_value}" in
+    v*) ;;
+    *) return 1 ;;
+  esac
+
+  validate_release_tag_version="${validate_release_tag_value#v}"
+  validate_release_tag_core="${validate_release_tag_version%%-*}"
+  if [ "${validate_release_tag_core}" != "${validate_release_tag_version}" ]; then
+    validate_release_tag_prerelease="${validate_release_tag_version#*-}"
+    while :; do
+      validate_release_tag_identifier="${validate_release_tag_prerelease%%.*}"
+      case "${validate_release_tag_identifier}" in
+        ''|*[!A-Za-z0-9-]*) return 1 ;;
+      esac
+      case "${validate_release_tag_identifier}" in
+        *[!0-9]*) ;;
+        0|[1-9]*) ;;
+        *) return 1 ;;
+      esac
+      [ "${validate_release_tag_identifier}" != "${validate_release_tag_prerelease}" ] || break
+      validate_release_tag_prerelease="${validate_release_tag_prerelease#*.}"
+    done
+  fi
+
+  validate_release_tag_major="${validate_release_tag_core%%.*}"
+  validate_release_tag_remainder="${validate_release_tag_core#*.}"
+  [ "${validate_release_tag_remainder}" != "${validate_release_tag_core}" ] || return 1
+  validate_release_tag_minor="${validate_release_tag_remainder%%.*}"
+  validate_release_tag_patch="${validate_release_tag_remainder#*.}"
+  [ "${validate_release_tag_patch}" != "${validate_release_tag_remainder}" ] || return 1
+  case "${validate_release_tag_patch}" in
+    *.*) return 1 ;;
+  esac
+  for validate_release_tag_part in \
+    "${validate_release_tag_major}" \
+    "${validate_release_tag_minor}" \
+    "${validate_release_tag_patch}"
+  do
+    case "${validate_release_tag_part}" in
+      ''|*[!0-9]*|0[0-9]*) return 1 ;;
+    esac
+  done
+  return 0
 }
 
 fetch_latest_tag() {
-  local response tag
-  response="$(curl -fsSL "${API_URL}")" || fail "failed to query GitHub Releases API at ${API_URL}"
-  tag="$(printf '%s\n' "${response}" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
-  [ -n "${tag}" ] || fail "could not determine latest release tag from GitHub API"
-  LATEST_TAG="${tag}"
+  fetch_latest_tag_effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}\n' "${LATEST_RELEASE_URL}")" || fail "failed to resolve latest GitHub release at ${LATEST_RELEASE_URL}"
+  fetch_latest_tag_prefix="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/"
+  case "${fetch_latest_tag_effective_url}" in
+    "${fetch_latest_tag_prefix}"*)
+      fetch_latest_tag_value="${fetch_latest_tag_effective_url#"${fetch_latest_tag_prefix}"}"
+      ;;
+    *)
+      fail "unexpected latest release URL from GitHub: ${fetch_latest_tag_effective_url}"
+      ;;
+  esac
+  case "${fetch_latest_tag_value}" in
+    *[/?#]*)
+      fail "unexpected latest release URL from GitHub: ${fetch_latest_tag_effective_url}"
+      ;;
+  esac
+  validate_release_tag "${fetch_latest_tag_value}" || fail "unsafe release tag received from GitHub: ${fetch_latest_tag_value}"
+  LATEST_TAG="${fetch_latest_tag_value}"
 }
 
 download_binary() {
-  local asset_name download_url target
-  asset_name="oberwatch-${RELEASE_OS}-${RELEASE_ARCH}"
-  download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${asset_name}"
-  target="${TMP_DIR}/${asset_name}"
+  download_binary_version="${LATEST_TAG#v}"
+  download_binary_asset_name="oberwatch_${download_binary_version}_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
+  download_binary_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${download_binary_asset_name}"
+  download_binary_archive="${TMP_DIR}/${download_binary_asset_name}"
 
-  log "Downloading ${asset_name} from ${LATEST_TAG}..."
-  curl -fsSL "${download_url}" -o "${target}" || fail "failed to download ${download_url}"
-  [ -s "${target}" ] || fail "downloaded binary is empty: ${target}"
-  chmod +x "${target}"
-  [ -x "${target}" ] || fail "downloaded binary is not executable: ${target}"
+  log "Downloading ${download_binary_asset_name} from ${LATEST_TAG}..."
+  curl -fsSL "${download_binary_url}" -o "${download_binary_archive}" || fail "failed to download ${download_binary_url}"
+  [ -s "${download_binary_archive}" ] || fail "downloaded archive is empty: ${download_binary_archive}"
 
-  DOWNLOADED_BINARY="${target}"
+  log "Extracting binary..."
+  tar -xzf "${download_binary_archive}" -C "${TMP_DIR}" oberwatch || fail "failed to extract binary from ${download_binary_archive}"
+  download_binary_path="${TMP_DIR}/oberwatch"
+  [ -f "${download_binary_path}" ] || fail "binary not found after extraction: ${download_binary_path}"
+  chmod +x "${download_binary_path}"
+
+  DOWNLOADED_BINARY="${download_binary_path}"
 }
 
 install_binary() {
@@ -400,18 +475,17 @@ ensure_user_state_dirs() {
 
 setup_linux_service_user() {
   if ! id -u "${LINUX_SERVICE_USER}" >/dev/null 2>&1; then
-    local nologin_shell
-    nologin_shell="$(command -v nologin || true)"
-    if [ -z "${nologin_shell}" ]; then
+    setup_linux_service_user_nologin_shell="$(command -v nologin || true)"
+    if [ -z "${setup_linux_service_user_nologin_shell}" ]; then
       if [ -x /usr/sbin/nologin ]; then
-        nologin_shell="/usr/sbin/nologin"
+        setup_linux_service_user_nologin_shell="/usr/sbin/nologin"
       elif [ -x /sbin/nologin ]; then
-        nologin_shell="/sbin/nologin"
+        setup_linux_service_user_nologin_shell="/sbin/nologin"
       else
-        nologin_shell="/bin/false"
+        setup_linux_service_user_nologin_shell="/bin/false"
       fi
     fi
-    sudo_cmd useradd --system --no-create-home --shell "${nologin_shell}" "${LINUX_SERVICE_USER}"
+    sudo_cmd useradd --system --no-create-home --shell "${setup_linux_service_user_nologin_shell}" "${LINUX_SERVICE_USER}"
   fi
 }
 
@@ -419,15 +493,14 @@ sync_linux_service_state() {
   sudo_cmd mkdir -p "${LINUX_STATE_DIR}/data"
   sudo_cmd cp "${USER_CONFIG_PATH}" "${LINUX_STATE_DIR}/oberwatch.toml"
   if [ -d "${USER_STATE_DIR}/data" ]; then
-    sudo_cmd sh -c "cp -R '${USER_STATE_DIR}/data/.' '${LINUX_STATE_DIR}/data/' 2>/dev/null || true"
+    sudo_cmd sh -c 'cp -R "$1/data/." "$2/data/" 2>/dev/null || true' sh "${USER_STATE_DIR}" "${LINUX_STATE_DIR}"
   fi
   sudo_cmd chown -R "${LINUX_SERVICE_USER}:${LINUX_SERVICE_USER}" "${LINUX_SERVICE_HOME}" "${LINUX_STATE_DIR}"
 }
 
 write_systemd_service() {
-  local service_path
-  service_path="/etc/systemd/system/${SERVICE_NAME}.service"
-  sudo_cmd tee "${service_path}" >/dev/null <<SERVICE
+  write_systemd_service_path="/etc/systemd/system/${SERVICE_NAME}.service"
+  sudo_cmd tee "${write_systemd_service_path}" >/dev/null <<SERVICE
 [Unit]
 Description=Oberwatch - AI Agent Proxy & Observability
 After=network.target
@@ -459,12 +532,13 @@ start_linux_service() {
 }
 
 wait_for_health() {
-  local attempt
-  for attempt in $(seq 1 15); do
+  wait_for_health_attempt=1
+  while [ "${wait_for_health_attempt}" -le 15 ]; do
     if curl -fsSL "${HEALTH_URL}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
+    wait_for_health_attempt=$((wait_for_health_attempt + 1))
   done
   return 1
 }
@@ -522,6 +596,13 @@ SUCCESS
 }
 
 main() {
+  case "${1:-}" in
+    -h|--help)
+      print_usage
+      return 0
+      ;;
+  esac
+
   need_cmd curl
   need_cmd chmod
   need_cmd install
@@ -535,14 +616,22 @@ main() {
   USER_STATE_DIR="${USER_HOME}/.oberwatch"
   USER_CONFIG_PATH="${USER_STATE_DIR}/oberwatch.toml"
   TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "${TMP_DIR}"' EXIT
+  trap 'rm -rf "${TMP_DIR}"' 0
 
   if [ -x "${INSTALL_PATH}" ]; then
     if prompt_yes_no "Oberwatch is already installed. Upgrade to latest? (y/N) "; then
       log "Upgrading existing installation..."
     else
-      exit 0
+      main_prompt_status=$?
+      case "${main_prompt_status}" in
+        1) return 0 ;;
+        *) return "${main_prompt_status}" ;;
+      esac
     fi
+  fi
+
+  if [ "${RELEASE_OS}" = "darwin" ]; then
+    fail "macOS binaries are not yet available. Install via Docker instead:\n  docker run -d -p 8080:8080 -v oberwatch-data:/data ghcr.io/oberwatch/oberwatch:latest"
   fi
 
   fetch_latest_tag

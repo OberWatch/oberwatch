@@ -318,8 +318,9 @@ func TestAccumulateStreamingUsage_Fixtures(t *testing.T) {
 				t.Fatalf("OutputTokens = %d, want %d", got.OutputTokens, tt.wantOutput)
 			}
 			if tt.wantEstimated {
-				if got.InputTokens < 1 || got.OutputTokens < 1 {
-					t.Fatalf("fallback estimated usage must be >=1 token, got input=%d output=%d", got.InputTokens, got.OutputTokens)
+				// Delta-content fallback sets OutputTokens only; body-length fallback sets both.
+				if got.OutputTokens < 1 {
+					t.Fatalf("fallback estimated output tokens must be >=1, got input=%d output=%d", got.InputTokens, got.OutputTokens)
 				}
 			}
 			if tt.wantWarnSubstr != "" && !strings.Contains(logs.String(), tt.wantWarnSubstr) {

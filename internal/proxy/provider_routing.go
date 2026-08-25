@@ -266,6 +266,10 @@ func serveAnthropicOpenAICompat(w http.ResponseWriter, r *http.Request, route re
 					CreatedAt:     time.Now().UTC(),
 				})
 			}
+			if meta.downgraded && meta.originalModel != "" {
+				w.Header().Set("X-Oberwatch-Downgraded", "true")
+				w.Header().Set("X-Oberwatch-Original-Model", meta.originalModel)
+			}
 		}
 	}
 

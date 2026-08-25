@@ -127,6 +127,28 @@ type Dispatcher interface {
 	Dispatch(context.Context, alert.Alert)
 }
 
+// globalBudgetState tracks cross-agent spending within a single period.
+//
+//nolint:govet // field order kept for semantic clarity: times grouped together.
+type globalBudgetState struct {
+	periodStartsAt time.Time
+	periodResetsAt time.Time
+	spentUSD       float64
+}
+
+// GlobalBudgetView is an API-friendly snapshot of global budget state.
+//
+//nolint:govet // field order kept for API clarity.
+type GlobalBudgetView struct {
+	Period         config.BudgetPeriod
+	PeriodStartsAt time.Time
+	PeriodResetsAt time.Time
+	LimitUSD       float64
+	SpentUSD       float64
+	RemainingUSD   float64
+	PercentageUsed float64
+}
+
 // BudgetManager tracks agent spend and applies budget enforcement rules.
 //
 //nolint:revive,govet // Name required by spec; field grouping aids maintainability.
@@ -137,16 +159,21 @@ type BudgetManager struct {
 	store        storage.Store
 	defaultState agentPolicy
 
-	mu            sync.RWMutex
-	agentPolicy   map[string]agentPolicy
-	state         map[string]*agentState
-	apiKeyMap     []config.APIKeyMapEntry
-	runaway       config.RunawayConfig
-	emergency     bool
-	knownAgents   map[string]struct{}
-	flushInterval time.Duration
-	flushStop     chan struct{}
-	flushWG       sync.WaitGroup
+	mu                   sync.RWMutex
+	agentPolicy          map[string]agentPolicy
+	state                map[string]*agentState
+	identificationMethod config.IdentificationMethod
+	apiKeyMap            []config.APIKeyMapEntry
+	runaway              config.RunawayConfig
+	emergency            bool
+	knownAgents          map[string]struct{}
+	flushInterval        time.Duration
+	flushStop            chan struct{}
+	flushWG              sync.WaitGroup
+
+	globalLimitUSD float64
+	globalPeriod   config.BudgetPeriod
+	globalState    globalBudgetState
 }
 
 // NewManager creates a budget manager from gate configuration.
@@ -261,16 +288,23 @@ func newManager(
 		clock = realClock{}
 	}
 
+	now := clock.Now().UTC()
+	globalPeriod := gate.GlobalBudget.Period
+	if globalPeriod == "" {
+		globalPeriod = config.BudgetPeriodMonthly
+	}
+
 	manager := &BudgetManager{
-		clock:       clock,
-		logger:      logger,
-		dispatcher:  dispatcher,
-		store:       store,
-		agentPolicy: make(map[string]agentPolicy),
-		state:       make(map[string]*agentState),
-		apiKeyMap:   append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
-		knownAgents: make(map[string]struct{}),
-		runaway:     gate.Runaway,
+		clock:                clock,
+		logger:               logger,
+		dispatcher:           dispatcher,
+		store:                store,
+		agentPolicy:          make(map[string]agentPolicy),
+		state:                make(map[string]*agentState),
+		identificationMethod: gate.Identification.Method,
+		apiKeyMap:            append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
+		knownAgents:          make(map[string]struct{}),
+		runaway:              gate.Runaway,
 		defaultState: agentPolicy{
 			period:                gate.DefaultBudget.Period,
 			actionOnExceed:        gate.DefaultBudget.ActionOnExceed,
@@ -278,6 +312,12 @@ func newManager(
 			downgradeThresholdPct: gate.DowngradeThresholdPct,
 			downgradeChain:        append([]string(nil), gate.DefaultDowngradeChain...),
 			alertThresholdsPct:    append([]float64(nil), gate.AlertThresholdsPct...),
+		},
+		globalLimitUSD: gate.GlobalBudget.LimitUSD,
+		globalPeriod:   globalPeriod,
+		globalState: globalBudgetState{
+			periodStartsAt: now,
+			periodResetsAt: nextPeriodReset(now, globalPeriod),
 		},
 	}
 
@@ -304,30 +344,60 @@ func newManager(
 	return manager, nil
 }
 
-// IdentifyAgent returns the calling agent by header, API key mapping, then "unknown".
+// IdentifyAgent returns the calling agent according to the configured identification method.
 func (m *BudgetManager) IdentifyAgent(request *http.Request) string {
 	if request == nil {
 		return unknownAgent
 	}
 
-	if headerAgent := strings.TrimSpace(request.Header.Get("X-Oberwatch-Agent")); headerAgent != "" {
+	headerAgent := strings.TrimSpace(request.Header.Get("X-Oberwatch-Agent"))
+	if m.identificationMethod == config.IdentificationMethodHeader {
+		if headerAgent == "" {
+			return unknownAgent
+		}
+		return headerAgent
+	}
+	if m.identificationMethod == config.IdentificationMethodSourceIP {
+		// Source-IP identification is not implemented yet; preserve the legacy header-then-credential behavior.
+		if headerAgent != "" {
+			return headerAgent
+		}
+		apiKey := extractAPIKey(request)
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(request.Header.Get("x-api-key"))
+		}
+		for _, mapping := range m.apiKeyMap {
+			prefix := strings.TrimSpace(mapping.APIKeyPrefix)
+			agent := strings.TrimSpace(mapping.Agent)
+			if prefix != "" && agent != "" && strings.HasPrefix(apiKey, prefix) {
+				return agent
+			}
+		}
+		return unknownAgent
+	}
+	if m.identificationMethod != config.IdentificationMethodAPIKey {
+		return unknownAgent
+	}
+	if headerAgent != "" {
 		return headerAgent
 	}
 
 	apiKey := extractAPIKey(request)
-	if apiKey != "" {
-		for _, mapping := range m.apiKeyMap {
-			prefix := strings.TrimSpace(mapping.APIKeyPrefix)
-			if prefix == "" {
-				continue
-			}
-			if strings.HasPrefix(apiKey, prefix) {
-				agent := strings.TrimSpace(mapping.Agent)
-				if agent != "" {
-					return agent
-				}
-			}
+	matchedAgent := ""
+	matchedPrefixLength := 0
+	for _, mapping := range m.apiKeyMap {
+		prefix := strings.TrimSpace(mapping.APIKeyPrefix)
+		agent := strings.TrimSpace(mapping.Agent)
+		if prefix == "" || agent == "" || len(prefix) <= matchedPrefixLength {
+			continue
 		}
+		if strings.HasPrefix(apiKey, prefix) {
+			matchedAgent = agent
+			matchedPrefixLength = len(prefix)
+		}
+	}
+	if matchedAgent != "" {
+		return matchedAgent
 	}
 
 	return unknownAgent
@@ -370,6 +440,21 @@ func (m *BudgetManager) CheckBudgetDetailed(agent string, estimatedCostUSD float
 			Period:   policy.period,
 			LimitUSD: policy.limitUSD,
 			SpentUSD: state.spentUSD,
+		}
+	}
+
+	// Check global budget before per-agent.
+	m.maybeResetGlobalPeriodLocked(now)
+	if m.globalLimitUSD > 0 && m.globalState.spentUSD+estimatedCostUSD > m.globalLimitUSD {
+		return Decision{
+			Action:   ActionReject,
+			Code:     "global_budget_exceeded",
+			Message:  fmt.Sprintf("Global budget limit of $%.2f exceeded (spent: $%.2f)", m.globalLimitUSD, m.globalState.spentUSD),
+			Agent:    normalizedAgent,
+			Period:   m.globalPeriod,
+			LimitUSD: m.globalLimitUSD,
+			SpentUSD: m.globalState.spentUSD,
+			Over:     true,
 		}
 	}
 
@@ -462,6 +547,9 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 	state.lastSeenAt = now
 	m.maybeResetPeriodLocked(state, policy, now)
 
+	m.maybeResetGlobalPeriodLocked(now)
+	m.globalState.spentUSD += costUSD
+
 	before := percentageUsed(policy.limitUSD, state.spentUSD)
 	state.spentUSD += costUSD
 	state.dirty = true
@@ -500,6 +588,39 @@ func (m *BudgetManager) RecordSpend(agent string, costUSD float64) {
 				policy.limitUSD,
 			)
 		}
+	}
+}
+
+// GetGlobalBudget returns the current global budget view.
+func (m *BudgetManager) GetGlobalBudget() GlobalBudgetView {
+	now := m.clock.Now().UTC()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.maybeResetGlobalPeriodLocked(now)
+
+	spent := m.globalState.spentUSD
+	limit := m.globalLimitUSD
+	remaining := 0.0
+	if limit > 0 {
+		remaining = limit - spent
+		if remaining < 0 {
+			remaining = 0
+		}
+	}
+	pct := 0.0
+	if limit > 0 {
+		pct = percentageUsed(limit, spent)
+	}
+	return GlobalBudgetView{
+		Period:         m.globalPeriod,
+		PeriodStartsAt: m.globalState.periodStartsAt,
+		PeriodResetsAt: m.globalState.periodResetsAt,
+		LimitUSD:       limit,
+		SpentUSD:       spent,
+		RemainingUSD:   remaining,
+		PercentageUsed: pct,
 	}
 }
 
@@ -580,6 +701,8 @@ func (m *BudgetManager) EmergencyStop() bool {
 }
 
 // RewriteModelForDowngrade rewrites the request body model to the next model in chain.
+// If no explicit chain is configured for the agent, the built-in provider chain is used
+// based on the model prefix (gpt-*, claude-*, gemini-*).
 func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byte) ([]byte, string, string, bool, error) {
 	normalizedAgent := normalizeAgent(agent)
 	if len(bytes.TrimSpace(requestBody)) == 0 {
@@ -589,10 +712,6 @@ func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byt
 	m.mu.RLock()
 	policy := m.policyForAgentLocked(normalizedAgent)
 	m.mu.RUnlock()
-
-	if len(policy.downgradeChain) < 2 {
-		return requestBody, "", "", false, nil
-	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(requestBody, &payload); err != nil {
@@ -609,7 +728,16 @@ func (m *BudgetManager) RewriteModelForDowngrade(agent string, requestBody []byt
 		return requestBody, "", "", false, nil
 	}
 
-	nextModel := nextInDowngradeChain(policy.downgradeChain, currentModel)
+	chain := policy.downgradeChain
+	if len(chain) == 0 {
+		// No explicit chain configured: fall back to built-in provider chain.
+		chain = builtinChainForModel(currentModel)
+	}
+	if len(chain) < 2 {
+		return requestBody, "", "", false, nil
+	}
+
+	nextModel := nextInDowngradeChain(chain, currentModel)
 	if nextModel == "" {
 		return requestBody, currentModel, "", false, nil
 	}
@@ -705,6 +833,18 @@ func (m *BudgetManager) stateForAgentLocked(agent string, policy agentPolicy, no
 	return state, true
 }
 
+func (m *BudgetManager) maybeResetGlobalPeriodLocked(now time.Time) {
+	if m.globalLimitUSD <= 0 {
+		return
+	}
+	if now.Before(m.globalState.periodResetsAt) {
+		return
+	}
+	m.globalState.spentUSD = 0
+	m.globalState.periodStartsAt = now
+	m.globalState.periodResetsAt = nextPeriodReset(now, m.globalPeriod)
+}
+
 func (m *BudgetManager) maybeResetPeriodLocked(state *agentState, policy agentPolicy, now time.Time) {
 	if now.Before(state.periodResetsAt) {
 		return
@@ -748,7 +888,7 @@ func percentageUsed(limit float64, spent float64) float64 {
 }
 
 func shouldDowngradeForThreshold(policy agentPolicy, projectedSpend float64) bool {
-	if policy.limitUSD <= 0 || len(policy.downgradeChain) == 0 {
+	if policy.limitUSD <= 0 {
 		return false
 	}
 	threshold := policy.downgradeThresholdPct
@@ -802,14 +942,12 @@ func extractAPIKey(request *http.Request) string {
 	}
 
 	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
-	if authorization != "" {
-		parts := strings.Fields(authorization)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			return strings.TrimSpace(parts[1])
-		}
+	parts := strings.Fields(authorization)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		return strings.TrimSpace(parts[1])
 	}
 
-	return strings.TrimSpace(request.Header.Get("x-api-key"))
+	return ""
 }
 
 func (m *BudgetManager) dispatchAlerts(events []alert.Alert) {

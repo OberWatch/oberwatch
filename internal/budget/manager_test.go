@@ -69,11 +69,235 @@ func baseGateConfig() config.GateConfig {
 	return cfg
 }
 
+func TestIdentifyAgent_SourceIPMethodPreservesLegacyIdentification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "explicit agent header wins over credentials",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": " header-agent ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "header-agent",
+		},
+		{
+			name:    "bearer credential uses legacy mapping",
+			headers: map[string]string{"Authorization": "Bearer test-prefix-suffix"},
+			want:    "mapped-agent",
+		},
+		{
+			name:    "x api key credential uses legacy mapping",
+			headers: map[string]string{"x-api-key": "test-prefix-suffix"},
+			want:    "mapped-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodSourceIP
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_HeaderMethodDoesNotUseAPIKeyMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "missing agent header ignores matching bearer token",
+			headers: map[string]string{
+				"Authorization": "Bearer test-prefix-suffix",
+			},
+			want: "unknown",
+		},
+		{
+			name: "blank agent header ignores matching bearer token",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": "   ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "unknown",
+		},
+		{
+			name: "nonblank agent header remains authoritative",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": " header-agent ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "header-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodHeader
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_APIKeyMethodUsesLongestValidPrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		want     string
+		mappings []config.APIKeyMapEntry
+	}{
+		{
+			name: "more specific mapping after general mapping",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+				{APIKeyPrefix: "test-team-", Agent: "team-agent"},
+			},
+			want: "team-agent",
+		},
+		{
+			name: "more specific mapping before general mapping",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-team-", Agent: "team-agent"},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "team-agent",
+		},
+		{
+			name: "empty prefix mapping is ignored",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "   ", Agent: "invalid-agent"},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "general-agent",
+		},
+		{
+			name: "blank agent mapping is ignored",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-team-", Agent: "   "},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "general-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodAPIKey
+			cfg.APIKeyMap = tt.mappings
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer test-team-suffix")
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_APIKeyMethodRequiresMatchingBearerAuthorization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		headers map[string]string
+		name    string
+	}{
+		{name: "authorization missing"},
+		{name: "authorization scheme malformed", headers: map[string]string{"Authorization": "Token test-prefix-suffix"}},
+		{
+			name: "malformed authorization does not fall back to matching x api key",
+			headers: map[string]string{
+				"Authorization": "Token malformed",
+				"x-api-key":     "test-prefix-suffix",
+			},
+		},
+		{name: "bearer token missing", headers: map[string]string{"Authorization": "Bearer"}},
+		{name: "bearer token unmatched", headers: map[string]string{"Authorization": "Bearer other-prefix-suffix"}},
+		{name: "x api key is not an authorization fallback", headers: map[string]string{"x-api-key": "test-prefix-suffix"}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodAPIKey
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != "unknown" {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, "unknown")
+			}
+		})
+	}
+}
+
 func TestIdentifyAgent(t *testing.T) {
 	t.Parallel()
 
 	clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
-	manager := NewManagerWithClock(baseGateConfig(), nil, clock)
+	cfg := baseGateConfig()
+	cfg.Identification.Method = config.IdentificationMethodAPIKey
+	manager := NewManagerWithClock(cfg, nil, clock)
 
 	tests := []struct {
 		name    string
@@ -713,7 +937,7 @@ func TestHelpers(t *testing.T) {
 	}
 }
 
-func TestNewManagerAndExtractAPIKeyFallback(t *testing.T) {
+func TestNewManagerAndExtractAPIKey(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseGateConfig()
@@ -726,9 +950,9 @@ func TestNewManagerAndExtractAPIKeyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
-	req.Header.Set("x-api-key", "sk-live-from-header")
-	if got := extractAPIKey(req); got != "sk-live-from-header" {
-		t.Fatalf("extractAPIKey(x-api-key) = %q, want %q", got, "sk-live-from-header")
+	req.Header.Set("x-api-key", "sk-liv...ader")
+	if got := extractAPIKey(req); got != "" {
+		t.Fatalf("extractAPIKey(x-api-key) = %q, want empty", got)
 	}
 
 	decision := manager.CheckBudgetDetailed("agent-real-clock", 0)
@@ -1357,5 +1581,128 @@ func TestBudgetViewsAndMutations(t *testing.T) {
 	}
 	if !reset.PeriodResetsAt.Equal(start.Add(7 * 24 * time.Hour)) {
 		t.Fatalf("ResetBudget period reset = %v, want %v", reset.PeriodResetsAt, start.Add(7*24*time.Hour))
+	}
+}
+
+func TestGlobalBudgetNotConfigured(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 0
+
+	m := NewManagerWithClock(cfg, nil, newMockClock(time.Now()))
+
+	decision := m.CheckBudgetDetailed("agent-x", 5.00)
+	if decision.Action != ActionAllow {
+		t.Fatalf("want ActionAllow when global budget not configured, got %s (code=%s)", decision.Action, decision.Code)
+	}
+}
+
+func TestGlobalBudgetUnderLimit(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 10
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	decision := m.CheckBudgetDetailed("agent-a", 5)
+	if decision.Action != ActionAllow {
+		t.Fatalf("want ActionAllow when under global limit, got %s", decision.Action)
+	}
+}
+
+func TestGlobalBudgetExceededRejectsAllAgents(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 1.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.80)
+	m.RecordSpend("agent-b", 0.25)
+
+	for _, agent := range []string{"agent-a", "agent-b", "agent-c"} {
+		d := m.CheckBudgetDetailed(agent, 0.01)
+		if d.Action != ActionReject {
+			t.Fatalf("agent %q: want ActionReject after global exceeded, got %s (code=%s)", agent, d.Action, d.Code)
+		}
+		if d.Code != "global_budget_exceeded" {
+			t.Fatalf("agent %q: want code global_budget_exceeded, got %s", agent, d.Code)
+		}
+	}
+}
+
+func TestGlobalBudgetCheckedBeforePerAgent(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 0
+	cfg.GlobalBudget.LimitUSD = 0.50
+	cfg.GlobalBudget.Period = config.BudgetPeriodDaily
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.60)
+
+	d := m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionReject || d.Code != "global_budget_exceeded" {
+		t.Fatalf("want global_budget_exceeded before per-agent check, got action=%s code=%s", d.Action, d.Code)
+	}
+}
+
+func TestGlobalBudgetPeriodReset(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 100
+	cfg.GlobalBudget.LimitUSD = 1.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodHourly
+
+	start := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	clk := newMockClock(start)
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 0.90)
+	m.RecordSpend("agent-b", 0.15)
+
+	d := m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionReject {
+		t.Fatalf("want reject before period reset, got %s", d.Action)
+	}
+
+	clk.Advance(61 * time.Minute)
+
+	d = m.CheckBudgetDetailed("agent-a", 0.01)
+	if d.Action != ActionAllow {
+		t.Fatalf("want allow after global period reset, got %s (code=%s)", d.Action, d.Code)
+	}
+}
+
+func TestGetGlobalBudgetView(t *testing.T) {
+	cfg := baseGateConfig()
+	cfg.GlobalBudget.LimitUSD = 5.00
+	cfg.GlobalBudget.Period = config.BudgetPeriodMonthly
+
+	clk := newMockClock(time.Now())
+	m := NewManagerWithClock(cfg, nil, clk)
+
+	m.RecordSpend("agent-a", 2.00)
+	m.RecordSpend("agent-b", 1.50)
+
+	gv := m.GetGlobalBudget()
+	if gv.LimitUSD != 5.00 {
+		t.Fatalf("limit = %v, want 5.00", gv.LimitUSD)
+	}
+	if gv.SpentUSD != 3.50 {
+		t.Fatalf("spent = %v, want 3.50", gv.SpentUSD)
+	}
+	if gv.RemainingUSD != 1.50 {
+		t.Fatalf("remaining = %v, want 1.50", gv.RemainingUSD)
+	}
+	if gv.PercentageUsed != 70.0 {
+		t.Fatalf("pct = %v, want 70.0", gv.PercentageUsed)
+	}
+	if gv.Period != config.BudgetPeriodMonthly {
+		t.Fatalf("period = %q, want monthly", gv.Period)
 	}
 }

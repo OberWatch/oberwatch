@@ -43,14 +43,7 @@ func TestValidate_InvalidConfigurations(t *testing.T) {
 			},
 			wantSubstr: "upstream.custom.base_url",
 		},
-		{
-			name: "default downgrade requires chain",
-			mutate: func(cfg *Config) {
-				cfg.Gate.DefaultBudget.ActionOnExceed = BudgetActionDowngrade
-				cfg.Gate.DefaultDowngradeChain = nil
-			},
-			wantSubstr: "gate.default_downgrade_chain",
-		},
+
 		{
 			name: "alert thresholds must increase",
 			mutate: func(cfg *Config) {
