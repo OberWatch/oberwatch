@@ -69,11 +69,235 @@ func baseGateConfig() config.GateConfig {
 	return cfg
 }
 
+func TestIdentifyAgent_SourceIPMethodPreservesLegacyIdentification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "explicit agent header wins over credentials",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": " header-agent ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "header-agent",
+		},
+		{
+			name:    "bearer credential uses legacy mapping",
+			headers: map[string]string{"Authorization": "Bearer test-prefix-suffix"},
+			want:    "mapped-agent",
+		},
+		{
+			name:    "x api key credential uses legacy mapping",
+			headers: map[string]string{"x-api-key": "test-prefix-suffix"},
+			want:    "mapped-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodSourceIP
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_HeaderMethodDoesNotUseAPIKeyMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "missing agent header ignores matching bearer token",
+			headers: map[string]string{
+				"Authorization": "Bearer test-prefix-suffix",
+			},
+			want: "unknown",
+		},
+		{
+			name: "blank agent header ignores matching bearer token",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": "   ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "unknown",
+		},
+		{
+			name: "nonblank agent header remains authoritative",
+			headers: map[string]string{
+				"X-Oberwatch-Agent": " header-agent ",
+				"Authorization":     "Bearer test-prefix-suffix",
+			},
+			want: "header-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodHeader
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_APIKeyMethodUsesLongestValidPrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		want     string
+		mappings []config.APIKeyMapEntry
+	}{
+		{
+			name: "more specific mapping after general mapping",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+				{APIKeyPrefix: "test-team-", Agent: "team-agent"},
+			},
+			want: "team-agent",
+		},
+		{
+			name: "more specific mapping before general mapping",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-team-", Agent: "team-agent"},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "team-agent",
+		},
+		{
+			name: "empty prefix mapping is ignored",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "   ", Agent: "invalid-agent"},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "general-agent",
+		},
+		{
+			name: "blank agent mapping is ignored",
+			mappings: []config.APIKeyMapEntry{
+				{APIKeyPrefix: "test-team-", Agent: "   "},
+				{APIKeyPrefix: "test-", Agent: "general-agent"},
+			},
+			want: "general-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodAPIKey
+			cfg.APIKeyMap = tt.mappings
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer test-team-suffix")
+
+			if got := manager.IdentifyAgent(req); got != tt.want {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIdentifyAgent_APIKeyMethodRequiresMatchingBearerAuthorization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		headers map[string]string
+		name    string
+	}{
+		{name: "authorization missing"},
+		{name: "authorization scheme malformed", headers: map[string]string{"Authorization": "Token test-prefix-suffix"}},
+		{
+			name: "malformed authorization does not fall back to matching x api key",
+			headers: map[string]string{
+				"Authorization": "Token malformed",
+				"x-api-key":     "test-prefix-suffix",
+			},
+		},
+		{name: "bearer token missing", headers: map[string]string{"Authorization": "Bearer"}},
+		{name: "bearer token unmatched", headers: map[string]string{"Authorization": "Bearer other-prefix-suffix"}},
+		{name: "x api key is not an authorization fallback", headers: map[string]string{"x-api-key": "test-prefix-suffix"}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := baseGateConfig()
+			cfg.Identification.Method = config.IdentificationMethodAPIKey
+			cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "test-prefix-", Agent: "mapped-agent"}}
+			manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)))
+
+			req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			if got := manager.IdentifyAgent(req); got != "unknown" {
+				t.Fatalf("IdentifyAgent() = %q, want %q", got, "unknown")
+			}
+		})
+	}
+}
+
 func TestIdentifyAgent(t *testing.T) {
 	t.Parallel()
 
 	clock := newMockClock(time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC))
-	manager := NewManagerWithClock(baseGateConfig(), nil, clock)
+	cfg := baseGateConfig()
+	cfg.Identification.Method = config.IdentificationMethodAPIKey
+	manager := NewManagerWithClock(cfg, nil, clock)
 
 	tests := []struct {
 		name    string
@@ -713,7 +937,7 @@ func TestHelpers(t *testing.T) {
 	}
 }
 
-func TestNewManagerAndExtractAPIKeyFallback(t *testing.T) {
+func TestNewManagerAndExtractAPIKey(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseGateConfig()
@@ -726,9 +950,9 @@ func TestNewManagerAndExtractAPIKeyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
-	req.Header.Set("x-api-key", "sk-live-from-header")
-	if got := extractAPIKey(req); got != "sk-live-from-header" {
-		t.Fatalf("extractAPIKey(x-api-key) = %q, want %q", got, "sk-live-from-header")
+	req.Header.Set("x-api-key", "sk-liv...ader")
+	if got := extractAPIKey(req); got != "" {
+		t.Fatalf("extractAPIKey(x-api-key) = %q, want empty", got)
 	}
 
 	decision := manager.CheckBudgetDetailed("agent-real-clock", 0)
