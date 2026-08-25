@@ -810,7 +810,14 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 	query := storage.CostQuery{
 		Agent:   strings.TrimSpace(r.URL.Query().Get("agent")),
 		Model:   strings.TrimSpace(r.URL.Query().Get("model")),
-		GroupBy: strings.TrimSpace(r.URL.Query().Get("group_by")),
+		GroupBy: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group_by"))),
+	}
+	if query.GroupBy != "" {
+		switch query.GroupBy {
+		case "agent", "model", "hour", "day", "none":
+		default:
+			return storage.CostQuery{}, fmt.Errorf("unsupported group_by query param %q", query.GroupBy)
+		}
 	}
 
 	if rawFrom := strings.TrimSpace(r.URL.Query().Get("from")); rawFrom != "" {
@@ -826,6 +833,9 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 			return storage.CostQuery{}, fmt.Errorf("invalid to query param: %w", err)
 		}
 		query.To = parsedTo
+	}
+	if !query.From.IsZero() && !query.To.IsZero() && query.From.After(query.To) {
+		return storage.CostQuery{}, fmt.Errorf("from query param must not be after to query param")
 	}
 
 	return query, nil

@@ -238,6 +238,12 @@ func (s *SQLiteStore) SaveCostRecord(ctx context.Context, record CostRecord) err
 // QueryCosts returns grouped or raw cost rows with optional filters.
 func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAggregate, error) {
 	groupBy := strings.ToLower(strings.TrimSpace(query.GroupBy))
+	const normalizedCreatedAt = `substr(created_at, 1, 19) || '.' || substr(
+		CASE WHEN substr(created_at, 20, 1) = '.'
+			THEN substr(created_at, 21, length(created_at) - 21)
+			ELSE ''
+		END || '000000000', 1, 9) || 'Z'`
+	const fixedWidthRFC3339Nano = "2006-01-02T15:04:05.000000000Z"
 
 	where := make([]string, 0, 4)
 	args := make([]any, 0, 4)
@@ -250,12 +256,12 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 		args = append(args, strings.TrimSpace(query.Model))
 	}
 	if !query.From.IsZero() {
-		where = append(where, "created_at >= ?")
-		args = append(args, query.From.UTC().Format(time.RFC3339Nano))
+		where = append(where, normalizedCreatedAt+" >= ?")
+		args = append(args, query.From.UTC().Format(fixedWidthRFC3339Nano))
 	}
 	if !query.To.IsZero() {
-		where = append(where, "created_at <= ?")
-		args = append(args, query.To.UTC().Format(time.RFC3339Nano))
+		where = append(where, normalizedCreatedAt+" <= ?")
+		args = append(args, query.To.UTC().Format(fixedWidthRFC3339Nano))
 	}
 
 	whereSQL := ""
@@ -267,14 +273,16 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 	switch groupBy {
 	case "", "none":
 		statement = `
-			SELECT agent, model, created_at AS bucket,
+			SELECT agent, model, provider, created_at AS bucket,
 				1 AS requests, input_tokens, output_tokens, cost_usd
 			FROM cost_records` + whereSQL + `
 			ORDER BY created_at ASC
 		`
 	case "agent":
 		statement = `
-			SELECT agent, '' AS model, '' AS bucket,
+			SELECT agent, '' AS model,
+				CASE WHEN COUNT(DISTINCT provider) = 1 THEN MIN(provider) ELSE '' END AS provider,
+				'' AS bucket,
 				COUNT(*) AS requests, SUM(input_tokens), SUM(output_tokens), SUM(cost_usd)
 			FROM cost_records` + whereSQL + `
 			GROUP BY agent
@@ -282,7 +290,9 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 		`
 	case "model":
 		statement = `
-			SELECT '' AS agent, model, '' AS bucket,
+			SELECT '' AS agent, model,
+				CASE WHEN COUNT(DISTINCT provider) = 1 THEN MIN(provider) ELSE '' END AS provider,
+				'' AS bucket,
 				COUNT(*) AS requests, SUM(input_tokens), SUM(output_tokens), SUM(cost_usd)
 			FROM cost_records` + whereSQL + `
 			GROUP BY model
@@ -290,7 +300,9 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 		`
 	case "hour":
 		statement = `
-			SELECT '' AS agent, '' AS model, strftime('%Y-%m-%dT%H:00:00Z', created_at) AS bucket,
+			SELECT '' AS agent, '' AS model,
+				CASE WHEN COUNT(DISTINCT provider) = 1 THEN MIN(provider) ELSE '' END AS provider,
+				strftime('%Y-%m-%dT%H:00:00Z', created_at) AS bucket,
 				COUNT(*) AS requests, SUM(input_tokens), SUM(output_tokens), SUM(cost_usd)
 			FROM cost_records` + whereSQL + `
 			GROUP BY bucket
@@ -298,7 +310,9 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 		`
 	case "day":
 		statement = `
-			SELECT '' AS agent, '' AS model, substr(created_at, 1, 10) AS bucket,
+			SELECT '' AS agent, '' AS model,
+				CASE WHEN COUNT(DISTINCT provider) = 1 THEN MIN(provider) ELSE '' END AS provider,
+				substr(created_at, 1, 10) AS bucket,
 				COUNT(*) AS requests, SUM(input_tokens), SUM(output_tokens), SUM(cost_usd)
 			FROM cost_records` + whereSQL + `
 			GROUP BY bucket
@@ -322,6 +336,7 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 		if err := rows.Scan(
 			&row.Agent,
 			&row.Model,
+			&row.Provider,
 			&row.Bucket,
 			&row.Requests,
 			&row.InputTokens,
@@ -352,14 +367,14 @@ func (s *SQLiteStore) QueryCostsCSV(ctx context.Context, query CostQuery) (strin
 func FormatCostAggregatesCSV(rows []CostAggregate) (string, error) {
 	var builder strings.Builder
 	writer := csv.NewWriter(&builder)
-	if err := writer.Write([]string{"agent", "model", "bucket", "requests", "input_tokens", "output_tokens", "cost_usd"}); err != nil {
+	if err := writer.Write([]string{"agent", "model", "provider", "requests", "input_tokens", "output_tokens", "cost_usd"}); err != nil {
 		return "", fmt.Errorf("write csv header: %w", err)
 	}
 	for _, row := range rows {
 		record := []string{
-			row.Agent,
-			row.Model,
-			row.Bucket,
+			neutralizeCSVFormula(row.Agent),
+			neutralizeCSVFormula(row.Model),
+			neutralizeCSVFormula(row.Provider),
 			fmt.Sprintf("%d", row.Requests),
 			fmt.Sprintf("%d", row.InputTokens),
 			fmt.Sprintf("%d", row.OutputTokens),
@@ -374,6 +389,13 @@ func FormatCostAggregatesCSV(rows []CostAggregate) (string, error) {
 		return "", fmt.Errorf("flush csv writer: %w", err)
 	}
 	return builder.String(), nil
+}
+
+func neutralizeCSVFormula(value string) string {
+	if value == "" || !strings.ContainsRune("=+-@	\r", rune(value[0])) {
+		return value
+	}
+	return "'" + value
 }
 
 // SaveAlert persists an alert record.
