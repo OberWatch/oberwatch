@@ -318,6 +318,20 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 			GROUP BY bucket
 			ORDER BY bucket ASC
 		`
+	// agent_hour is the only agent-preserving time grouping. An hour bucket names
+	// an absolute instant, so a caller can fold it into days on its own calendar.
+	// There is deliberately no agent_day: a day truncated from a UTC timestamp is
+	// not a calendar day outside UTC.
+	case "agent_hour":
+		statement = `
+			SELECT agent, '' AS model,
+				CASE WHEN COUNT(DISTINCT provider) = 1 THEN MIN(provider) ELSE '' END AS provider,
+				strftime('%Y-%m-%dT%H:00:00Z', created_at) AS bucket,
+				COUNT(*) AS requests, SUM(input_tokens), SUM(output_tokens), SUM(cost_usd)
+			FROM cost_records` + whereSQL + `
+			GROUP BY agent, bucket
+			ORDER BY bucket ASC, agent ASC
+		`
 	default:
 		return nil, fmt.Errorf("unsupported cost query group_by %q", query.GroupBy)
 	}
