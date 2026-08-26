@@ -149,8 +149,8 @@ assert.doesNotMatch(
 
 assert.match(
   costsPage,
-  /onclick=\{\s*retry\s*\}|onclick=\{\(\)\s*=>\s*retry\(\)\}/,
-  'The error state must offer a Retry action'
+  /<ErrorState[\s\S]{0,200}?onRetry=\{(\(\)\s*=>\s*)?retry(\(\))?\}/,
+  'The error state must offer a Retry action, wired through the shared ErrorState component'
 );
 assert.match(
   costsPage,
