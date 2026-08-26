@@ -55,8 +55,8 @@ type CostRecord struct {
 //
 //nolint:govet // keep query fields grouped by filter semantics.
 type CostQuery struct {
-	Agent   string
-	Model   string
+	Agent string
+	Model string
 	// GroupBy selects the aggregation shape: "", "agent", "model", "hour", "day",
 	// "agent_hour", or legacy "none".
 	//

@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	version = "v0.1.1"
+	version = "v0.1.2"
 	channel = "dev"
 	commit  = "dev"
 	built   = "unknown"

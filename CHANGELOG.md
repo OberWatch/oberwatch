@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-26
+
+### Added
+- `last_model` and ordered `models_used` fields on `GET /agents`
+- Sortable monospace Model column on the Agents page, with a keyboard-reachable list of every model an agent has used
+- Custom start and end dates on the Costs page, validated for required values and start before end
+- `agent_hour` cost grouping that keeps both the agent and the hour bucket, so the cost-over-time chart is genuinely stacked per agent
+- Shared skeleton, KPI, table and chart loading components used by Overview, Agents, Costs and Settings
+- Shared error state with a Retry action that keeps the active range and filters
+- Cost range and time bucket reference in `docs/costs-date-ranges.md`
+
+### Changed
+- Costs `Today` now covers the local calendar day instead of a rolling 24 hours, and one selected range drives the totals, charts, table and CSV export
+- Loading placeholders stop pulsing when the viewer prefers reduced motion
+- A loaded zero or empty list is rendered as an empty state rather than as loading placeholders
+
+### Fixed
+- Ungrouped cost queries order by normalized timestamp then row ID, so latest-model selection is deterministic when timestamps tie
+- The Linux installer systemd unit sets `OBERWATCH_TRACE__SQLITE_PATH`, so the service starts, and the install summary prints the paths the service actually uses
+- Docker Hub image path in the README deployment channel table
+
 ## [0.1.1] - 2026-08-25
 
 ### Added
