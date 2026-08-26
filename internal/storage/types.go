@@ -55,9 +55,20 @@ type CostRecord struct {
 //
 //nolint:govet // keep query fields grouped by filter semantics.
 type CostQuery struct {
-	Agent   string
-	Model   string
-	GroupBy string // "", "agent", "model", "hour", "day", or legacy "none"
+	Agent string
+	Model string
+	// GroupBy selects the aggregation shape: "", "agent", "model", "hour", "day",
+	// "agent_hour", or legacy "none".
+	//
+	// "agent_hour" keeps both the agent and the time bucket, so callers can build
+	// stacked per-agent time series; "hour" and "day" collapse the agent dimension.
+	//
+	// Time buckets are computed in UTC. An "hour" bucket is therefore an absolute
+	// instant and is safe to re-bucket on any calendar, but a "day" bucket is a UTC
+	// date, which is not a calendar day for a caller in a non-zero UTC offset. A
+	// caller that needs per-agent days should request "agent_hour" and fold the
+	// buckets on its own calendar.
+	GroupBy string
 	From    time.Time
 	To      time.Time
 }

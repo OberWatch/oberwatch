@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1141,4 +1142,128 @@ func (s storeFunc) SetSetting(context.Context, string, string) error {
 
 func (s storeFunc) DeleteSetting(context.Context, string) error {
 	return nil
+}
+
+func TestSQLiteStore_QueryCostsAgentBucketGrouping(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+	base := time.Date(2026, time.March, 26, 10, 0, 0, 0, time.UTC)
+
+	records := []CostRecord{
+		{ID: "c1", Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.01, CreatedAt: base},
+		{ID: "c2", Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 100, OutputTokens: 50, CostUSD: 0.02, CreatedAt: base.Add(20 * time.Minute)},
+		{ID: "c3", Agent: "agent-b", Model: "claude-sonnet-4-6", Provider: "anthropic", InputTokens: 200, OutputTokens: 80, CostUSD: 0.04, CreatedAt: base.Add(40 * time.Minute)},
+		{ID: "c4", Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 150, OutputTokens: 60, CostUSD: 0.08, CreatedAt: base.Add(25 * time.Hour)},
+	}
+	for _, record := range records {
+		if err := store.SaveCostRecord(ctx, record); err != nil {
+			t.Fatalf("SaveCostRecord() error = %v", err)
+		}
+	}
+
+	type wantRow struct {
+		agent    string
+		bucket   string
+		requests int
+		costUSD  float64
+	}
+
+	//nolint:govet // keep grouping test matrix explicit.
+	tests := []struct {
+		name  string
+		query CostQuery
+		want  []wantRow
+	}{
+		{
+			name:  "agent_hour keeps both agent and hour bucket",
+			query: CostQuery{GroupBy: "agent_hour"},
+			want: []wantRow{
+				{agent: "agent-a", bucket: "2026-03-26T10:00:00Z", requests: 2, costUSD: 0.03},
+				{agent: "agent-b", bucket: "2026-03-26T10:00:00Z", requests: 1, costUSD: 0.04},
+				{agent: "agent-a", bucket: "2026-03-27T11:00:00Z", requests: 1, costUSD: 0.08},
+			},
+		},
+		{
+			name:  "agent_hour honours the agent filter",
+			query: CostQuery{GroupBy: "agent_hour", Agent: "agent-b"},
+			want: []wantRow{
+				{agent: "agent-b", bucket: "2026-03-26T10:00:00Z", requests: 1, costUSD: 0.04},
+			},
+		},
+		{
+			name:  "agent_hour honours the range filter",
+			query: CostQuery{GroupBy: "agent_hour", From: base.Add(24 * time.Hour)},
+			want: []wantRow{
+				{agent: "agent-a", bucket: "2026-03-27T11:00:00Z", requests: 1, costUSD: 0.08},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := store.QueryCosts(ctx, tt.query)
+			if err != nil {
+				t.Fatalf("QueryCosts() error = %v", err)
+			}
+			if len(rows) != len(tt.want) {
+				t.Fatalf("len(QueryCosts()) = %d, want %d; rows = %#v", len(rows), len(tt.want), rows)
+			}
+			for index, want := range tt.want {
+				got := rows[index]
+				if got.Agent != want.agent {
+					t.Errorf("rows[%d].Agent = %q, want %q", index, got.Agent, want.agent)
+				}
+				if got.Bucket != want.bucket {
+					t.Errorf("rows[%d].Bucket = %q, want %q", index, got.Bucket, want.bucket)
+				}
+				if got.Requests != want.requests {
+					t.Errorf("rows[%d].Requests = %d, want %d", index, got.Requests, want.requests)
+				}
+				if math.Abs(got.CostUSD-want.costUSD) > 1e-9 {
+					t.Errorf("rows[%d].CostUSD = %v, want %v", index, got.CostUSD, want.costUSD)
+				}
+			}
+		})
+	}
+}
+
+func TestSQLiteStore_QueryCostsRejectsCalendarAmbiguousGrouping(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t, 0)
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		groupBy string
+	}{
+		{
+			// A day truncated from a UTC timestamp is not a calendar day for any
+			// viewer outside UTC: in a negative offset one local day spans two UTC
+			// dates, and a daylight-saving day is 23 or 25 hours long. Per-agent day
+			// series are folded from agent_hour rows on the client instead.
+			name:    "agent_day is not a calendar-correct grouping",
+			groupBy: "agent_day",
+		},
+		{
+			name:    "unknown groupings are still rejected",
+			groupBy: "agent_week",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := store.QueryCosts(ctx, CostQuery{GroupBy: tt.groupBy}); err == nil {
+				t.Fatalf("QueryCosts(group_by=%q) error = nil, want an error", tt.groupBy)
+			}
+		})
+	}
 }

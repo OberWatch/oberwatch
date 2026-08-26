@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { fetchJSON } from '$lib/api';
   import { formatUSD } from '$lib/currency';
-  import { AgentEditPanel, BudgetBar, DataTable, StatusBadge } from '$lib/components';
+  import { AgentEditPanel, BudgetBar, DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
+  import { loadPhase } from '$lib/loadState';
   import type { Budget, BudgetUpdateRequest, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
 
@@ -53,6 +54,8 @@
   let editOpen = $state(false);
   let editBusy = $state(false);
   let editError = $state<string | null>(null);
+
+  const phase = $derived(loadPhase({ loading, errorMessage, hasData: rows.length > 0 }));
 
   const filteredRows = $derived.by(() => {
     const term = search.trim().toLowerCase();
@@ -321,17 +324,8 @@
     />
   </div>
 
-  {#if errorMessage}
-    <div class="rounded-lg border border-danger/40 bg-danger/10 p-4">
-      <p class="text-sm text-danger">{errorMessage}</p>
-      <button
-        type="button"
-        class="mt-3 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-        onclick={() => loadAgents()}
-      >
-        Retry
-      </button>
-    </div>
+  {#if phase === 'error'}
+    <ErrorState message={errorMessage ?? 'Failed to load agents.'} onRetry={loadAgents} />
   {/if}
 
   {#if successMessage}
@@ -340,33 +334,28 @@
     </div>
   {/if}
 
-  {#if loading}
-    <div class="overflow-hidden rounded-lg border border-border-default bg-surface">
-      {#each Array.from({ length: 6 }) as _, index (index)}
-        <div class="h-12 animate-pulse border-b border-border-default bg-elevated/30"></div>
-      {/each}
-    </div>
-  {:else if filteredRows.length === 0}
-    {#if rows.length === 0}
-      <div class="space-y-4 rounded-lg border border-border-default bg-surface p-6">
-        <div class="space-y-1">
-          <h2 class="text-lg font-semibold text-text-primary">No agents detected yet</h2>
-          <p class="text-sm text-text-secondary">
-            Point your AI agents at Oberwatch to start tracking spend and controls.
-          </p>
+  {#if phase === 'loading'}
+    <SkeletonTable rows={6} columns={8} label="Loading agents" />
+  {:else if phase === 'empty'}
+    <div class="space-y-4 rounded-lg border border-border-default bg-surface p-6">
+      <div class="space-y-1">
+        <h2 class="text-lg font-semibold text-text-primary">No agents detected yet</h2>
+        <p class="text-sm text-text-secondary">
+          Point your AI agents at Oberwatch to start tracking spend and controls.
+        </p>
+      </div>
+
+      <div class="overflow-hidden rounded-2xl border border-border-default bg-elevated">
+        <div class="flex items-center gap-3 border-b border-border-default px-4 py-3">
+          <div class="flex items-center gap-2">
+            <span class="h-3 w-3 rounded-full bg-danger"></span>
+            <span class="h-3 w-3 rounded-full bg-warning"></span>
+            <span class="h-3 w-3 rounded-full bg-success"></span>
+          </div>
+          <p class="font-mono text-sm text-text-secondary">point any agent at Oberwatch</p>
         </div>
 
-        <div class="overflow-hidden rounded-2xl border border-border-default bg-elevated">
-          <div class="flex items-center gap-3 border-b border-border-default px-4 py-3">
-            <div class="flex items-center gap-2">
-              <span class="h-3 w-3 rounded-full bg-danger"></span>
-              <span class="h-3 w-3 rounded-full bg-warning"></span>
-              <span class="h-3 w-3 rounded-full bg-success"></span>
-            </div>
-            <p class="font-mono text-sm text-text-secondary">point any agent at Oberwatch</p>
-          </div>
-
-          <pre class="overflow-x-auto px-4 py-5 font-mono text-sm leading-7 text-text-primary/85"><code><span class="text-text-secondary/85"># Just change the base URL and add a header</span>
+        <pre class="overflow-x-auto px-4 py-5 font-mono text-sm leading-7 text-text-primary/85"><code><span class="text-text-secondary/85"># Just change the base URL and add a header</span>
 curl <span class="text-danger">{proxyURL}</span><span class="text-accent">/v1/chat/completions</span> \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
@@ -375,15 +364,16 @@ curl <span class="text-danger">{proxyURL}</span><span class="text-accent">/v1/ch
     "model": "gpt-4.1-mini",
     "messages": [&#123;"role": "user", "content": "Hello"&#125;]
   &#125;'</code></pre>
-        </div>
       </div>
-    {:else}
+    </div>
+  {:else if phase === 'ready'}
+    {#if filteredRows.length === 0}
       <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-muted">
         No agents match the current filter.
       </div>
+    {:else}
+      <DataTable {columns} rows={filteredRows} {onSort} {cellRenderers} />
     {/if}
-  {:else}
-    <DataTable {columns} rows={filteredRows} {onSort} {cellRenderers} />
   {/if}
 </section>
 

@@ -1,15 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Chart, type ChartDataset, type ChartOptions } from 'chart.js';
+  import { Chart, type ChartDataset } from 'chart.js';
   import { chartPalette, configureCharts } from '$lib/charts';
+  import { lineChartOptions, lineDatasetStyle } from '$lib/chartOptions';
 
   let {
     labels,
     datasets,
+    stacked = false,
+    ariaLabel = 'Line chart',
     height = 280
   }: {
     labels: string[];
     datasets: ChartDataset<'line', number[]>[];
+    stacked?: boolean;
+    // A canvas is opaque to assistive technology, so callers must say what the
+    // chart plots. Pair it with a textual alternative for the values themselves.
+    ariaLabel?: string;
     height?: number;
   } = $props();
 
@@ -20,52 +27,11 @@
     return {
       labels,
       datasets: datasets.map((dataset, index) => ({
-        tension: 0.35,
-        fill: false,
-        borderWidth: 2,
-        pointRadius: 2,
-        pointHoverRadius: 4,
-        borderColor: dataset.borderColor ?? chartPalette[index % chartPalette.length],
-        backgroundColor: dataset.backgroundColor ?? chartPalette[index % chartPalette.length],
+        ...lineDatasetStyle({ stacked }, index, chartPalette),
         ...dataset
       }))
     };
   }
-
-  const options: ChartOptions<'line'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: {
-      mode: 'index',
-      intersect: false
-    },
-    scales: {
-      x: {
-        ticks: {
-          color: '#8888A0'
-        },
-        grid: {
-          color: '#2A2A3C'
-        }
-      },
-      y: {
-        beginAtZero: true,
-        ticks: {
-          color: '#8888A0'
-        },
-        grid: {
-          color: '#2A2A3C'
-        }
-      }
-    },
-    plugins: {
-      legend: {
-        labels: {
-          color: '#8888A0'
-        }
-      }
-    }
-  };
 
   onMount(() => {
     configureCharts();
@@ -76,7 +42,7 @@
     chart = new Chart(canvasEl, {
       type: 'line',
       data: buildData(),
-      options
+      options: lineChartOptions({ stacked })
     });
 
     return () => {
@@ -91,11 +57,20 @@
     }
 
     chart.data = buildData();
-    chart.options = options;
+    chart.options = lineChartOptions({ stacked });
     chart.update();
   });
 </script>
 
-<div class="w-full rounded-lg border border-border-default bg-surface p-4" style={`height: ${height}px`}>
-  <canvas bind:this={canvasEl}></canvas>
+<!--
+  A canvas cannot carry an ARIA role, so the wrapper is the labelled image and the
+  canvas is hidden to keep the label from being announced twice.
+-->
+<div
+  class="w-full rounded-lg border border-border-default bg-surface p-4"
+  style={`height: ${height}px`}
+  role="img"
+  aria-label={ariaLabel}
+>
+  <canvas bind:this={canvasEl} aria-hidden="true"></canvas>
 </div>

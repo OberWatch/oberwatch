@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fetchJSON } from '$lib/api';
-  import { DataTable, StatusBadge } from '$lib/components';
+  import { DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
+  import { loadPhase } from '$lib/loadState';
   import type { HealthResponse, PricingResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
 
@@ -38,6 +39,8 @@
   let currentPassword = $state('');
   let newPassword = $state('');
   let confirmPassword = $state('');
+
+  const phase = $derived(loadPhase({ loading, errorMessage, hasData: true }));
 
   const pricingRenderers = $derived.by<Record<string, Snippet<[RowData]>>>(() => ({
     input_per_million: inputPriceCell,
@@ -88,6 +91,19 @@
       return;
     }
 
+    loading = false;
+    await loadPricing();
+  }
+
+  /**
+   * loadPricing is split out from loadSettings so a pricing failure — and its
+   * retry — never touches the page-wide `loading` flag. That flag hides the
+   * whole page behind the skeleton, which would unmount the password form the
+   * user might already be filling in.
+   */
+  async function loadPricing(): Promise<void> {
+    pricingWarning = null;
+
     try {
       const pricing = await fetchJSON<PricingResponse>('/pricing');
       pricingRows = pricing.pricing.map((entry) => ({
@@ -97,10 +113,8 @@
         output_per_million: entry.output_per_million
       }));
     } catch (err) {
-      pricingWarning =
-        err instanceof Error ? err.message : 'Pricing data unavailable.';
-    } finally {
-      loading = false;
+      pricingRows = [];
+      pricingWarning = err instanceof Error ? err.message : 'Pricing data unavailable.';
     }
   }
 
@@ -145,22 +159,16 @@
     <p class="text-sm text-text-secondary">Read-only system configuration and runtime health.</p>
   </header>
 
-  {#if errorMessage}
-    <div class="rounded-lg border border-danger/40 bg-danger/10 p-4">
-      <p class="text-sm text-danger">{errorMessage}</p>
-      <button
-        type="button"
-        class="mt-3 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-        onclick={loadSettings}
-      >
-        Retry
-      </button>
-    </div>
+  {#if phase === 'error'}
+    <ErrorState message={errorMessage ?? 'Failed to load system health.'} onRetry={loadSettings} />
   {/if}
 
-  {#if loading}
-    <div class="h-28 animate-pulse rounded-lg border border-border-default bg-surface"></div>
-  {:else}
+  {#if phase === 'loading'}
+    <div class="space-y-4">
+      <SkeletonTable rows={3} columns={3} label="Loading system info" />
+      <SkeletonTable rows={4} columns={4} label="Loading pricing" />
+    </div>
+  {:else if phase === 'ready'}
     <section class="rounded-lg border border-border-default bg-surface p-4">
       <h2 class="text-lg font-semibold text-text-primary">System Info</h2>
       <dl class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
@@ -194,7 +202,19 @@
     <section class="rounded-lg border border-border-default bg-surface p-4">
       <h2 class="text-lg font-semibold text-text-primary">Model Pricing</h2>
       {#if pricingWarning}
-        <p class="mt-2 text-sm text-warning">{pricingWarning}</p>
+        <div
+          role="status"
+          class="mt-2 flex items-center justify-between gap-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2"
+        >
+          <p class="text-sm text-warning">{pricingWarning}</p>
+          <button
+            type="button"
+            class="rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-accent hover:text-white"
+            onclick={loadPricing}
+          >
+            Retry pricing
+          </button>
+        </div>
       {/if}
       {#if pricingRows.length === 0}
         <p class="mt-3 text-sm text-text-muted">No configured model pricing entries.</p>

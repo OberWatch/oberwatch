@@ -32,7 +32,7 @@
   let authLoading = $state(true);
   let authStatus = $state<AuthStatusResponse | null>(null);
   let logoutError = $state<string | null>(null);
-  let displayVersion = $state('v0.1.1');
+  let displayVersion = $state('v0.1.2');
   let emergencyStop = $state(false);
   let emergencyBusy = $state(false);
   let alertToasts = $state<{ id: number; agent: string; threshold: number }[]>([]);

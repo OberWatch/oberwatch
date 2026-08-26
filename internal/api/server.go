@@ -55,7 +55,7 @@ type sseEvent struct {
 // New builds a management API server.
 func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.Store, version string) *Server {
 	if strings.TrimSpace(version) == "" {
-		version = "0.1.1"
+		version = "0.1.2"
 	}
 
 	server := &Server{
@@ -847,7 +847,7 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 	}
 	if query.GroupBy != "" {
 		switch query.GroupBy {
-		case "agent", "model", "hour", "day", "none":
+		case "agent", "model", "hour", "day", "agent_hour", "none":
 		default:
 			return storage.CostQuery{}, fmt.Errorf("unsupported group_by query param %q", query.GroupBy)
 		}
