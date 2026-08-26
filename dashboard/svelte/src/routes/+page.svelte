@@ -4,7 +4,8 @@
   import { fetchJSON } from '$lib/api';
   import { formatUSD } from '$lib/currency';
   import { connectStream } from '$lib/sse';
-  import { AlertItem, KPICard, LineChart } from '$lib/components';
+  import { AlertItem, ErrorState, KPICard, LineChart, SkeletonChart, SkeletonKPICard } from '$lib/components';
+  import { loadPhase } from '$lib/loadState';
   import type {
     Agent,
     AgentsResponse,
@@ -37,6 +38,8 @@
   let values = $state<number[]>([]);
   let recentAlerts = $state<Alert[]>([]);
   let globalBudget = $state<GlobalBudget | null>(null);
+
+  const phase = $derived(loadPhase({ loading, errorMessage, hasData: values.length > 0 }));
 
   const lineDatasets = $derived<ChartDataset<'line', number[]>[]>([
     {
@@ -168,32 +171,30 @@
     </div>
   {/if}
 
-  {#if errorMessage}
-    <div class="rounded-lg border border-danger/40 bg-danger/10 p-4">
-      <p class="text-sm text-danger">{errorMessage}</p>
-      <button
-        type="button"
-        class="mt-3 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-        onclick={() => loadOverview()}
-      >
-        Retry
-      </button>
-    </div>
+  {#if phase === 'error'}
+    <ErrorState message={errorMessage ?? 'Failed to load overview data.'} onRetry={loadOverview} />
   {/if}
 
   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-    <KPICard title="Total Spend Today" value={formatUSD(totalSpendToday)} subtitle="Last 24 hours" />
-    <KPICard title="Active Agents" value={activeAgents} subtitle="Currently serving traffic" />
-    <div class={alertsToday > 0 ? 'rounded-lg ring-1 ring-warning/60' : ''}>
-      <KPICard
-        title="Alerts Today"
-        value={alertsToday}
-        subtitle="Recent alert events"
-        trend={alertsToday > 0 ? 'down' : 'up'}
-        trendLabel={alertsToday > 0 ? 'Needs attention' : 'All clear'}
-      />
-    </div>
-    <KPICard title="Uptime" value={formatUptime(uptimeSeconds)} subtitle="Proxy process uptime" />
+    {#if phase === 'loading'}
+      <SkeletonKPICard label="Loading total spend today" />
+      <SkeletonKPICard label="Loading active agents" />
+      <SkeletonKPICard label="Loading alerts today" />
+      <SkeletonKPICard label="Loading uptime" />
+    {:else if phase !== 'error'}
+      <KPICard title="Total Spend Today" value={formatUSD(totalSpendToday)} subtitle="Last 24 hours" />
+      <KPICard title="Active Agents" value={activeAgents} subtitle="Currently serving traffic" />
+      <div class={alertsToday > 0 ? 'rounded-lg ring-1 ring-warning/60' : ''}>
+        <KPICard
+          title="Alerts Today"
+          value={alertsToday}
+          subtitle="Recent alert events"
+          trend={alertsToday > 0 ? 'down' : 'up'}
+          trendLabel={alertsToday > 0 ? 'Needs attention' : 'All clear'}
+        />
+      </div>
+      <KPICard title="Uptime" value={formatUptime(uptimeSeconds)} subtitle="Proxy process uptime" />
+    {/if}
   </div>
 
   {#if globalBudget}
@@ -216,15 +217,13 @@
     </div>
   {/if}
 
-  {#if loading}
-    <section class="flex h-[320px] items-center justify-center rounded-lg border border-border-default bg-surface p-4 text-sm text-text-secondary">
-      Loading overview data...
-    </section>
-  {:else if values.length === 0}
+  {#if phase === 'loading'}
+    <SkeletonChart height={320} label="Loading cost trend" />
+  {:else if phase === 'empty'}
     <section class="flex h-[320px] items-center justify-center rounded-lg border border-border-default bg-surface p-4 text-center text-sm text-text-secondary">
       No cost data yet. Proxy some requests to see cost trends.
     </section>
-  {:else}
+  {:else if phase === 'ready'}
     <LineChart {labels} datasets={lineDatasets} height={320} />
   {/if}
 

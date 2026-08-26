@@ -3,9 +3,19 @@
   import type { ChartDataset } from 'chart.js';
   import { fetchBlob, fetchJSON } from '$lib/api';
   import { formatUSD } from '$lib/currency';
-  import { BarChart, DataTable, DateRangePicker, KPICard, LineChart } from '$lib/components';
+  import {
+    BarChart,
+    DataTable,
+    DateRangePicker,
+    ErrorState,
+    KPICard,
+    LineChart,
+    SkeletonChart,
+    SkeletonKPICard
+  } from '$lib/components';
   import { buildStackedSeries, describeStackedSeries, totalsByAgent, totalsByModel } from '$lib/costs';
   import { createCostsLoader } from '$lib/costsLoader';
+  import { loadPhase } from '$lib/loadState';
   import {
     canExportSelection,
     costsExportQuery,
@@ -44,6 +54,8 @@
   let totalCostUSD = $state(0);
   let rows = $state<CostRow[]>([]);
   let seriesRows = $state<CostBreakdown[]>([]);
+
+  const phase = $derived(loadPhase({ loading, errorMessage, hasData: rows.length > 0 }));
 
   const barByAgent = $derived(totalsByAgent(rows));
   const barByModel = $derived(totalsByModel(rows));
@@ -94,6 +106,10 @@
 
     if (outcome.status === 'invalid') {
       rangeError = outcome.error;
+      // No request went out for this selection, so a prior API failure is now
+      // stale. Clear it so the fatal ErrorState banner does not sit alongside
+      // the range picker's own validation message.
+      errorMessage = null;
       return;
     }
 
@@ -181,31 +197,26 @@
     </button>
   </div>
 
-  {#if errorMessage}
-    <div class="rounded-lg border border-danger/40 bg-danger/10 p-4">
-      <p class="text-sm text-danger">{errorMessage}</p>
-      <button
-        type="button"
-        class="mt-3 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-        onclick={retry}
-      >
-        Retry
-      </button>
-    </div>
+  {#if phase === 'error'}
+    <ErrorState message={errorMessage ?? 'Failed to load costs.'} onRetry={retry} />
   {/if}
 
-  <KPICard title="Total Cost" value={formatUSD(totalCostUSD)} subtitle={`Range: ${rangeLabel}`} />
+  {#if phase === 'loading'}
+    <SkeletonKPICard label="Loading total cost" />
+  {:else if phase !== 'error'}
+    <KPICard title="Total Cost" value={formatUSD(totalCostUSD)} subtitle={`Range: ${rangeLabel}`} />
+  {/if}
 
-  {#if loading}
+  {#if phase === 'loading'}
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <div class="h-72 animate-pulse rounded-lg border border-border-default bg-surface"></div>
-      <div class="h-72 animate-pulse rounded-lg border border-border-default bg-surface"></div>
+      <SkeletonChart height={320} label="Loading cost by agent" />
+      <SkeletonChart height={320} label="Loading cost by model" />
     </div>
-  {:else if rows.length === 0}
+  {:else if phase === 'empty'}
     <div class="rounded-lg border border-border-default bg-surface p-8 text-center text-sm text-text-muted">
       No cost data available for {rangeLabel}.
     </div>
-  {:else}
+  {:else if phase === 'ready'}
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
       <BarChart labels={barByAgent.labels} values={barByAgent.values} height={320} />
       <BarChart labels={barByModel.labels} values={barByModel.values} height={320} />
