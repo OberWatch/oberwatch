@@ -13,6 +13,9 @@
     "build": "svelte-kit sync && vite build",
     "preview": "vite preview",
     "test:model-column": "node scripts/check-agents-model-column.mjs",
+    "test:costs-page": "node scripts/check-costs-page-contract.mjs",
+    "test:unit": "node --test 'src/lib/**/*.test.ts'",
+    "test": "npm run test:unit && npm run test:model-column && npm run test:costs-page",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint:ts": "tsc --noEmit"
   },

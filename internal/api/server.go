@@ -847,7 +847,7 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 	}
 	if query.GroupBy != "" {
 		switch query.GroupBy {
-		case "agent", "model", "hour", "day", "none":
+		case "agent", "model", "hour", "day", "agent_hour", "none":
 		default:
 			return storage.CostQuery{}, fmt.Errorf("unsupported group_by query param %q", query.GroupBy)
 		}

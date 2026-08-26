@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -728,6 +729,8 @@ func TestServer_CostQueryValidation(t *testing.T) {
 		path string
 	}{
 		{name: "unsupported grouping is a client error", path: basePath + "/costs?group_by=provider"},
+		{name: "calendar-ambiguous agent_day is a client error", path: basePath + "/costs?group_by=agent_day"},
+		{name: "calendar-ambiguous agent_day is a client error for export", path: basePath + "/costs/export?group_by=agent_day"},
 		{name: "unsupported grouping is a client error for export", path: basePath + "/costs/export?group_by=provider"},
 		{name: "reversed range is a client error for costs", path: basePath + "/costs?from=2026-03-27T00:00:00Z&to=2026-03-26T00:00:00Z"},
 		{name: "reversed range is a client error for export", path: basePath + "/costs/export?from=2026-03-27T00:00:00Z&to=2026-03-26T00:00:00Z"},
@@ -1626,4 +1629,169 @@ func mustString(t *testing.T, payload map[string]any, key string) string {
 		t.Fatalf("payload key %q type = %T, want string", key, value)
 	}
 	return asString
+}
+
+func TestServer_CostStackedSeriesContract(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.March, 26, 10, 0, 0, 0, time.UTC)
+	from := base.Add(-time.Hour).Format(time.RFC3339)
+	to := base.Add(48 * time.Hour).Format(time.RFC3339)
+
+	type wantPoint struct {
+		agent    string
+		bucket   string
+		costUSD  float64
+		requests float64
+	}
+
+	tests := []struct {
+		name    string
+		groupBy string
+		want    []wantPoint
+	}{
+		{
+			name:    "agent_hour breakdown keeps agent and hour bucket",
+			groupBy: "agent_hour",
+			want: []wantPoint{
+				{agent: "agent-a", bucket: "2026-03-26T10:00:00Z", costUSD: 0.03, requests: 2},
+				{agent: "agent-b", bucket: "2026-03-26T10:00:00Z", costUSD: 0.04, requests: 1},
+				{agent: "agent-a", bucket: "2026-03-27T11:00:00Z", costUSD: 0.08, requests: 1},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			seedCostRecords(t, store, []storage.CostRecord{
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.01, CreatedAt: base},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.02, CreatedAt: base.Add(20 * time.Minute)},
+				{Agent: "agent-b", Model: "claude-sonnet-4-6", Provider: "anthropic", InputTokens: 20, OutputTokens: 8, CostUSD: 0.04, CreatedAt: base.Add(40 * time.Minute)},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 15, OutputTokens: 6, CostUSD: 0.08, CreatedAt: base.Add(25 * time.Hour)},
+			})
+
+			path := basePath + "/costs?group_by=" + tt.groupBy + "&from=" + from + "&to=" + to
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+
+			payload := decodeJSONMap(t, recorder.Result().Body)
+			rawBreakdown, ok := payload["breakdown"].([]any)
+			if !ok {
+				t.Fatalf("breakdown type = %T, want []any", payload["breakdown"])
+			}
+			if len(rawBreakdown) != len(tt.want) {
+				t.Fatalf("len(breakdown) = %d, want %d; payload = %#v", len(rawBreakdown), len(tt.want), payload)
+			}
+			for index, want := range tt.want {
+				row, ok := rawBreakdown[index].(map[string]any)
+				if !ok {
+					t.Fatalf("breakdown[%d] type = %T, want map[string]any", index, rawBreakdown[index])
+				}
+				if got := row["agent"]; got != want.agent {
+					t.Errorf("breakdown[%d].agent = %v, want %q", index, got, want.agent)
+				}
+				if got := row["bucket"]; got != want.bucket {
+					t.Errorf("breakdown[%d].bucket = %v, want %q", index, got, want.bucket)
+				}
+				if got := mustFloat(t, row, "cost_usd"); math.Abs(got-want.costUSD) > 1e-9 {
+					t.Errorf("breakdown[%d].cost_usd = %v, want %v", index, got, want.costUSD)
+				}
+				if got := mustFloat(t, row, "requests"); got != want.requests {
+					t.Errorf("breakdown[%d].requests = %v, want %v", index, got, want.requests)
+				}
+			}
+		})
+	}
+}
+
+func TestParseCostQuery_AgentBucketGroupingsAccepted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		groupBy     string
+		wantGroupBy string
+	}{
+		{name: "agent_hour is accepted", groupBy: "agent_hour", wantGroupBy: "agent_hour"},
+		{name: "agent_hour is case normalized", groupBy: "Agent_Hour", wantGroupBy: "agent_hour"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, basePath+"/costs?group_by="+tt.groupBy, nil)
+			query, err := parseCostQuery(req)
+			if err != nil {
+				t.Fatalf("parseCostQuery() error = %v", err)
+			}
+			if query.GroupBy != tt.wantGroupBy {
+				t.Fatalf("GroupBy = %q, want %q", query.GroupBy, tt.wantGroupBy)
+			}
+		})
+	}
+}
+
+func TestServer_CostExportUsesSelectedRangeGrouping(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.March, 26, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "agent_hour export shares the costs range and grouping",
+			path: basePath + "/costs/export?group_by=agent_hour&from=" +
+				base.Add(-time.Hour).Format(time.RFC3339) + "&to=" + base.Add(time.Hour).Format(time.RFC3339),
+			want: "agent,model,provider,requests,input_tokens,output_tokens,cost_usd\n" +
+				"agent-a,,openai,2,20,10,0.03000000\n" +
+				"agent-b,,anthropic,1,20,8,0.04000000\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _, store := newTestServer(t)
+			seedCostRecords(t, store, []storage.CostRecord{
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.01, CreatedAt: base},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5, CostUSD: 0.02, CreatedAt: base.Add(20 * time.Minute)},
+				{Agent: "agent-b", Model: "claude-sonnet-4-6", Provider: "anthropic", InputTokens: 20, OutputTokens: 8, CostUSD: 0.04, CreatedAt: base.Add(40 * time.Minute)},
+				{Agent: "agent-a", Model: "gpt-4o", Provider: "openai", InputTokens: 15, OutputTokens: 6, CostUSD: 0.08, CreatedAt: base.Add(25 * time.Hour)},
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			addAuthenticatedSessionCookie(t, store, req)
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, req)
+
+			response := recorder.Result()
+			defer func() { _ = response.Body.Close() }()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status code = %d, want %d; body = %s", response.StatusCode, http.StatusOK, recorder.Body.String())
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("ReadAll() error = %v", err)
+			}
+			if string(body) != tt.want {
+				t.Fatalf("CSV body = %q, want %q", string(body), tt.want)
+			}
+		})
+	}
 }
