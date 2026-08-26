@@ -517,8 +517,8 @@ write_systemd_service
 	}
 
 	configPath := filepath.Join(tempDir, "oberwatch.toml")
-	if err := os.WriteFile(configPath, nil, 0o644); err != nil {
-		t.Fatalf("write empty config: %v", err)
+	if writeErr := os.WriteFile(configPath, nil, 0o644); writeErr != nil {
+		t.Fatalf("write empty config: %v", writeErr)
 	}
 
 	t.Setenv(key, value)
