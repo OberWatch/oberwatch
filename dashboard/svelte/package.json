@@ -12,6 +12,7 @@
     "dev": "vite dev",
     "build": "svelte-kit sync && vite build",
     "preview": "vite preview",
+    "test:model-column": "node scripts/check-agents-model-column.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint:ts": "tsc --noEmit"
   },

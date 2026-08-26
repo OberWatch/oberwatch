@@ -93,6 +93,8 @@ export interface AlertsResponse {
 export interface Agent {
   name: string;
   status: string;
+  last_model: string;
+  models_used: string[];
   total_requests: number;
   total_cost_usd: number;
   last_seen_at: string;

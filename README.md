@@ -174,9 +174,11 @@ The embedded dashboard is part of the main binary.
 
 Current pages:
 - `Overview` for spend, active agents, alerts, uptime, and emergency stop
-- `Agents` for runtime status, budget usage, edit panel, rename, kill/enable/reset
+- `Agents` for runtime status, model history, budget usage, edit panel, rename, kill/enable/reset
 - `Costs` for totals, breakdowns, charts, and CSV export
 - `Settings` for system health, provider status, pricing, and password change
+
+`GET /_oberwatch/api/v1/agents` returns `last_model` and `models_used` for each agent. `models_used` is distinct and ordered from most recently used to least recently used. `last_model` is its first value. If records share a timestamp, descending cost-record ID breaks the tie. Agents without cost records return `last_model: ""` and `models_used: []`.
 
 The UI uses server-sent events for live updates, including:
 - budget threshold toasts

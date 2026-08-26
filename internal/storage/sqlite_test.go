@@ -66,6 +66,96 @@ func TestSQLiteStore_SchemaAutoCreation(t *testing.T) {
 
 }
 
+func TestSQLiteStore_QueryCostsUsesDeterministicChronologicalOrder(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 14, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		costs      []CostRecord
+		wantModels []string
+	}{
+		{
+			name: "fractional timestamps sort chronologically and record id breaks ties",
+			costs: []CostRecord{
+				{ID: "exact", Agent: "agent-a", Model: "exact", Provider: "custom", CreatedAt: now},
+				{ID: "tie-a", Agent: "agent-a", Model: "tie-a", Provider: "custom", CreatedAt: now.Add(100 * time.Millisecond)},
+				{ID: "tie-z", Agent: "agent-a", Model: "tie-z", Provider: "custom", CreatedAt: now.Add(100 * time.Millisecond)},
+			},
+			wantModels: []string{"exact", "tie-a", "tie-z"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore(t, 0)
+			ctx := context.Background()
+			for _, cost := range tt.costs {
+				if err := store.SaveCostRecord(ctx, cost); err != nil {
+					t.Fatalf("SaveCostRecord() error = %v", err)
+				}
+			}
+			rows, err := store.QueryCosts(ctx, CostQuery{})
+			if err != nil {
+				t.Fatalf("QueryCosts() error = %v", err)
+			}
+			if len(rows) != len(tt.wantModels) {
+				t.Fatalf("len(QueryCosts()) = %d, want %d", len(rows), len(tt.wantModels))
+			}
+			for index, want := range tt.wantModels {
+				if rows[index].Model != want {
+					t.Fatalf("QueryCosts()[%d].Model = %q, want %q", index, rows[index].Model, want)
+				}
+			}
+		})
+	}
+}
+
+func TestSQLiteStore_RetentionRemovesModelHistoryRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		retention time.Duration
+		age       time.Duration
+		wantRows  int
+	}{
+		{name: "expired model usage is removed with its cost record", retention: 24 * time.Hour, age: 48 * time.Hour, wantRows: 0},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore(t, tt.retention)
+			ctx := context.Background()
+			if err := store.SaveCostRecord(ctx, CostRecord{
+				ID:        "expired-model",
+				Agent:     "agent-a",
+				Model:     "old-model",
+				Provider:  "custom",
+				CreatedAt: time.Now().UTC().Add(-tt.age),
+			}); err != nil {
+				t.Fatalf("SaveCostRecord() error = %v", err)
+			}
+			if err := store.CleanupRetention(ctx); err != nil {
+				t.Fatalf("CleanupRetention() error = %v", err)
+			}
+			rows, err := store.QueryCosts(ctx, CostQuery{})
+			if err != nil {
+				t.Fatalf("QueryCosts() error = %v", err)
+			}
+			if len(rows) != tt.wantRows {
+				t.Fatalf("len(QueryCosts()) = %d, want %d", len(rows), tt.wantRows)
+			}
+		})
+	}
+}
+
 func TestSQLiteStore_SaveAndQueryCosts(t *testing.T) {
 	t.Parallel()
 

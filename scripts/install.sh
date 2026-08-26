@@ -513,7 +513,7 @@ ExecStart=${INSTALL_PATH} serve --config ${LINUX_STATE_DIR}/oberwatch.toml
 Restart=always
 RestartSec=5
 WorkingDirectory=${LINUX_STATE_DIR}
-Environment=OBERWATCH_DATA_DIR=${LINUX_STATE_DIR}/data
+Environment=OBERWATCH_TRACE__SQLITE_PATH=${LINUX_STATE_DIR}/data/oberwatch.db
 
 [Install]
 WantedBy=multi-user.target
@@ -550,8 +550,8 @@ print_success_linux() {
 
 → Dashboard:  http://localhost:8080
 → Proxy URL:  http://localhost:8080
-→ Config:     ${USER_CONFIG_PATH}
-→ Data:       ${USER_STATE_DIR}/data/
+→ Config:     ${LINUX_STATE_DIR}/oberwatch.toml
+→ Data:       ${LINUX_STATE_DIR}/data/
 → Logs:       sudo journalctl -u ${SERVICE_NAME} -f
 
 Open the dashboard to complete setup.
