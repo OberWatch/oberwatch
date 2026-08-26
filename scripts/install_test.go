@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/OberWatch/oberwatch/internal/config"
 )
 
 func installerPath(t *testing.T) string {
@@ -462,6 +464,107 @@ main
 				t.Fatalf("main continued into release fetch after non-yes prompt; stat error = %v", statErr)
 			}
 		})
+	}
+}
+
+func TestWriteSystemdServiceEnvironmentIsAcceptedConfigOverride(t *testing.T) {
+	tempDir := t.TempDir()
+	linuxStateDir := filepath.Join(tempDir, "state")
+	unitPath := filepath.Join(tempDir, "unit")
+
+	library := installerLibrary(t)
+	snippet := `. "$1"
+SERVICE_NAME=oberwatch
+LINUX_SERVICE_USER=oberwatch
+INSTALL_PATH=/usr/local/bin/oberwatch
+LINUX_STATE_DIR=$2
+UNIT_PATH=$3
+sudo_cmd() { "$@"; }
+tee() { cat >"$UNIT_PATH"; }
+write_systemd_service
+`
+	output, err := runShellSnippet(t, snippet, library, linuxStateDir, unitPath)
+	if err != nil {
+		t.Fatalf("write_systemd_service failed: %v\n%s", err, output)
+	}
+
+	unit, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read generated unit: %v", err)
+	}
+
+	environmentLine := regexp.MustCompile(`(?m)^Environment=(OBERWATCH_\S+)$`).FindSubmatch(unit)
+	if environmentLine == nil {
+		t.Fatalf("generated unit has no Environment=OBERWATCH_* line:\n%s", unit)
+	}
+	key, value, ok := strings.Cut(string(environmentLine[1]), "=")
+	if !ok {
+		t.Fatalf("generated Environment line is not KEY=VALUE: %q", environmentLine[1])
+	}
+
+	const wantKey = "OBERWATCH_TRACE__SQLITE_PATH"
+	if key != wantKey {
+		t.Fatalf("generated Environment key = %q, want %q", key, wantKey)
+	}
+
+	wantValue := filepath.Join(linuxStateDir, "data", "oberwatch.db")
+	if value != wantValue {
+		t.Fatalf("Environment %s = %q, want %q", key, value, wantValue)
+	}
+
+	if bytes.Contains(unit, []byte("OBERWATCH_DATA_DIR")) {
+		t.Fatalf("generated unit still sets OBERWATCH_DATA_DIR, want only %s:\n%s", wantKey, unit)
+	}
+
+	configPath := filepath.Join(tempDir, "oberwatch.toml")
+	if err := os.WriteFile(configPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty config: %v", err)
+	}
+
+	t.Setenv(key, value)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load rejected the installer's Environment override %s=%s: %v", key, value, err)
+	}
+	if cfg.Trace.Storage == config.TraceStorageSQLite && !strings.HasPrefix(cfg.Trace.SQLitePath, linuxStateDir) {
+		t.Fatalf("trace.sqlite_path = %q, want a path under the service-owned state directory %q", cfg.Trace.SQLitePath, linuxStateDir)
+	}
+}
+
+func TestPrintSuccessLinuxReportsServiceOwnedPaths(t *testing.T) {
+	t.Parallel()
+	library := installerLibrary(t)
+	snippet := `. "$1"
+USER_HOME=/root
+USER_STATE_DIR=/root/.oberwatch
+USER_CONFIG_PATH=/root/.oberwatch/oberwatch.toml
+LINUX_SERVICE_USER=oberwatch
+LINUX_SERVICE_HOME=/home/oberwatch
+LINUX_STATE_DIR=/home/oberwatch/.oberwatch
+SERVICE_NAME=oberwatch
+print_success_linux
+`
+	output, err := runShellSnippet(t, snippet, library)
+	if err != nil {
+		t.Fatalf("print_success_linux failed: %v\n%s", err, output)
+	}
+
+	wantConfig := "/home/oberwatch/.oberwatch/oberwatch.toml"
+	wantData := "/home/oberwatch/.oberwatch/data/"
+	unwantedConfig := "/root/.oberwatch/oberwatch.toml"
+	unwantedData := "/root/.oberwatch/data/"
+
+	if !bytes.Contains(output, []byte(wantConfig)) {
+		t.Errorf("print_success_linux output does not report the service-owned config path %q:\n%s", wantConfig, output)
+	}
+	if !bytes.Contains(output, []byte(wantData)) {
+		t.Errorf("print_success_linux output does not report the service-owned data path %q:\n%s", wantData, output)
+	}
+	if bytes.Contains(output, []byte(unwantedConfig)) {
+		t.Errorf("print_success_linux output reports the invoking user's config path %q instead of the service-owned path:\n%s", unwantedConfig, output)
+	}
+	if bytes.Contains(output, []byte(unwantedData)) {
+		t.Errorf("print_success_linux output reports the invoking user's data path %q instead of the service-owned path:\n%s", unwantedData, output)
 	}
 }
 
