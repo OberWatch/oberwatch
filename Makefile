@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: tools build run dev test test-race lint clean fmt vet dashboard
+.PHONY: tools build run dev test test-race test-cli lint clean fmt vet dashboard
 
 BINARY_NAME := oberwatch
 BUILD_DIR := bin
@@ -30,6 +30,10 @@ test:
 # Run tests with race detector
 test-race:
 	$(GO) test -race ./...
+
+# Exercise `oberwatch init` and `oberwatch validate` against a built binary
+test-cli:
+	./scripts/test-cli-config.sh
 
 # Run linter
 lint: tools
