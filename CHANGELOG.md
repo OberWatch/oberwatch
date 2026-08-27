@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A missing config found through the search order reported `--config flag` as its source
 - The starter, example and installer configs no longer describe `admin_token` as a required bearer token; management auth is session-based
 - Provider status reporting reflects the real upstream state
+- `make tools` and `make lint` failed with `Permission denied` because `scripts/dev/install-tools.sh` had no executable bit
+- README listed a project doc that is not in the repository
 
 ## [0.1.2] - 2026-08-26
 

@@ -30,6 +30,14 @@ esac
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+# OBERWATCH_* variables are applied as config overrides, so any left in the
+# caller's environment would change what this contract proves.
+while IFS='=' read -r name _; do
+  case "$name" in
+    OBERWATCH_*) unset "$name" ;;
+  esac
+done < <(env)
+
 PORT="${RUNAWAY_TEST_PORT:-18296}"
 MOCK_PORT="${RUNAWAY_TEST_MOCK_PORT:-18297}"
 TIMEOUT_SECONDS="${RUNAWAY_TEST_TIMEOUT:-120}"

@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: tools build run dev test test-race test-cli lint clean fmt vet dashboard
+.PHONY: tools build run dev test test-race test-cli smoke lint clean fmt vet dashboard
 
 BINARY_NAME := oberwatch
 BUILD_DIR := bin

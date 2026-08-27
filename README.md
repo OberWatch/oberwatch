@@ -313,7 +313,6 @@ Project docs:
 - [SECURITY.md](./SECURITY.md)
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AI_CODING.md](./AI_CODING.md)
-- [CLAUDE.md](./CLAUDE.md)
 
 ## Contributing
 
