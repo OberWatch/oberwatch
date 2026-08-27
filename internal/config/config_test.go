@@ -123,7 +123,7 @@ func TestLoad_ReturnsErrors(t *testing.T) {
 		{
 			name:       "missing file",
 			path:       filepath.Join(t.TempDir(), "missing.toml"),
-			wantSubstr: "open",
+			wantSubstr: "not found",
 		},
 		{
 			name:       "invalid toml",
@@ -376,7 +376,7 @@ func TestResolveConfigPath(t *testing.T) {
 				}
 			}
 
-			got, err := resolveConfigPath(path)
+			got, _, err := resolveConfigPathWithSource(path)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("resolveConfigPath() error = %v, want substring %q", err, tt.wantErr)
