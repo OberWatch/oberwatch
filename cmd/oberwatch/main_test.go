@@ -602,7 +602,7 @@ func TestSourceBuildCLIProductVersion(t *testing.T) {
 			if err := root.Execute(); err != nil {
 				t.Fatalf("Execute() error = %v", err)
 			}
-			if got, want := strings.SplitN(stdout.String(), "\n", 2)[0], "oberwatch v0.1.2"; got != want {
+			if got, want := strings.SplitN(stdout.String(), "\n", 2)[0], "oberwatch v0.1.3"; got != want {
 				t.Fatalf("version line = %q, want %q", got, want)
 			}
 		})

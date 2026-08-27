@@ -35,6 +35,11 @@ test-race:
 test-cli:
 	./scripts/test-cli-config.sh
 
+# Run the release smoke contracts (init/validate, runaway kill/enable, task budgets)
+# against a release-style build, or against a binary: make smoke BIN=./oberwatch
+smoke:
+	./scripts/release-smoke.sh $(BIN)
+
 # Run linter
 lint: tools
 	golangci-lint run

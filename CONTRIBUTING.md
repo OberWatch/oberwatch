@@ -41,6 +41,14 @@ make test
 # Run tests with race detector
 make test-race
 
+# Exercise `oberwatch init` and `oberwatch validate` against a built binary
+make test-cli
+
+# Run the release smoke contracts (init/validate, runaway kill/enable,
+# task budgets) against a release-style build; pass BIN=path to check a
+# downloaded release binary
+make smoke
+
 # Run linter
 make lint
 

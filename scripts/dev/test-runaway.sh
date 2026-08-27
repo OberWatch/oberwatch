@@ -11,9 +11,21 @@
 #   - the kill stays sticky after the window has passed
 #   - POST /budgets/{agent}/enable restores traffic without replaying alerts
 #
+# Usage: scripts/dev/test-runaway.sh [path-to-oberwatch-binary]
+# Without an argument the script builds ./cmd/oberwatch into a temp dir. The
+# mock upstream is always built from source, so a Go toolchain is required.
+#
 # Everything runs on loopback, needs no provider credentials, is bounded by
 # RUNAWAY_TEST_TIMEOUT seconds, and cleans up processes and files on exit.
 set -euo pipefail
+
+# Resolve a caller-supplied binary against the caller's directory before
+# moving to the repository root.
+BINARY_ARG="${1:-}"
+case "$BINARY_ARG" in
+  "" | /*) ;;
+  *) BINARY_ARG="$(pwd)/$BINARY_ARG" ;;
+esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
@@ -35,7 +47,8 @@ MOCK="http://127.0.0.1:${MOCK_PORT}"
 if [ -z "${RUNAWAY_TEST_CHILD:-}" ]; then
   if command -v timeout >/dev/null 2>&1; then
     # Re-run under timeout so a hung server can never leave the script running.
-    RUNAWAY_TEST_CHILD=1 exec timeout --kill-after=5 "$TIMEOUT_SECONDS" "$0" "$@"
+    # The binary path is already absolute, so the child resolves it the same way.
+    RUNAWAY_TEST_CHILD=1 exec timeout --kill-after=5 "$TIMEOUT_SECONDS" "$0" ${BINARY_ARG:+"$BINARY_ARG"}
   fi
   # Without timeout(1) the run is still bounded: every curl has --max-time and
   # every wait loop has a fixed iteration count.
@@ -43,7 +56,7 @@ if [ -z "${RUNAWAY_TEST_CHILD:-}" ]; then
 fi
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oberwatch-runaway.XXXXXX")"
-BINARY="${WORK_DIR}/oberwatch"
+BINARY="${BINARY_ARG:-${WORK_DIR}/oberwatch}"
 MOCK_BINARY="${WORK_DIR}/mock-upstream"
 CONFIG="${WORK_DIR}/oberwatch.toml"
 DB="${WORK_DIR}/oberwatch.db"
@@ -108,8 +121,13 @@ for p in "$PORT" "$MOCK_PORT"; do
   fi
 done
 
-echo "==> Building oberwatch..."
-"$GO" build -o "$BINARY" ./cmd/oberwatch
+if [ -z "$BINARY_ARG" ]; then
+  echo "==> Building oberwatch..."
+  "$GO" build -o "$BINARY" ./cmd/oberwatch
+else
+  [ -x "$BINARY" ] || fail "oberwatch binary $BINARY is not executable"
+  echo "==> Using oberwatch binary $BINARY"
+fi
 
 echo "==> Building mock upstream + webhook receiver..."
 mkdir -p "${WORK_DIR}/mock"
