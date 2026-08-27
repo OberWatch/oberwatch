@@ -35,6 +35,7 @@ type freshnessChecker struct {
 	block     chan struct{}
 	barrier   map[string]*barrierGate
 	deadlines []time.Time
+	sawPeer   map[string]bool
 
 	openai    provider.StatusRow
 	anthropic provider.StatusRow
@@ -44,7 +45,6 @@ type freshnessChecker struct {
 	calls       int
 	inFlight    int
 	maxInFlight int
-	sawPeer     map[string]bool
 	ollamaOK    bool
 }
 
@@ -141,8 +141,8 @@ func (f *freshnessChecker) sawPeerProbe(name string) bool {
 
 // fakeClock is a manually advanced clock so TTL behaviour is deterministic.
 type fakeClock struct {
-	mu  sync.Mutex
 	now time.Time
+	mu  sync.Mutex
 }
 
 func newFakeClock() *fakeClock {

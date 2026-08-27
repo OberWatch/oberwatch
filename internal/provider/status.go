@@ -64,15 +64,15 @@ var fallbackLoopbackClient = sync.OnceValue(newLoopbackClient)
 //
 //nolint:govet // Keep fields grouped by what they describe, not by width.
 type StatusRow struct {
-	Provider string `json:"provider"`
-	Label    string `json:"label"`
-	Status   Status `json:"status"`
-	Detail   string `json:"detail"`
-
 	// ObservedAt is when this row was actually observed. It is nil for a row
 	// that has never been probed, so a reader can always tell "checked and
 	// unavailable" from "not checked yet".
 	ObservedAt *time.Time `json:"observed_at,omitempty"`
+
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Status   Status `json:"status"`
+	Detail   string `json:"detail"`
 
 	// Public is true when the row came from the provider's public status feed
 	// and false when it came from a local reachability check.
@@ -87,9 +87,7 @@ type Checker struct {
 	// HTTPClient is used for the public status feeds only. Local Ollama probes
 	// always go through a hardened loopback-only client, so no caller can
 	// widen what an Ollama probe is allowed to reach.
-	HTTPClient         *http.Client
-	OpenAIStatusURL    string
-	AnthropicStatusURL string
+	HTTPClient *http.Client
 
 	// ollamaClient is the hardened client used for local Ollama probes.
 	ollamaClient *http.Client
@@ -98,6 +96,9 @@ type Checker struct {
 	// unexported and cannot bypass the loopback URL guard or the no-redirect
 	// policy, both of which are applied around it.
 	ollamaTransport http.RoundTripper
+
+	OpenAIStatusURL    string
+	AnthropicStatusURL string
 }
 
 // NewChecker builds a Checker using the real public status feed URLs and HTTP

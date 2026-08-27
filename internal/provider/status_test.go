@@ -14,8 +14,8 @@ func TestChecker_CheckOpenAI_MapsIndicatorToStatus(t *testing.T) {
 	tests := []struct {
 		name       string
 		indicator  string
-		statusCode int
 		wantStatus Status
+		statusCode int
 	}{
 		{name: "operational", indicator: "none", statusCode: http.StatusOK, wantStatus: StatusOperational},
 		{name: "degraded", indicator: "minor", statusCode: http.StatusOK, wantStatus: StatusDegraded},

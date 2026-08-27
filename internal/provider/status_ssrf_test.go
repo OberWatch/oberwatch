@@ -14,8 +14,8 @@ import (
 // all rather than that a request merely failed.
 type recordingTransport struct {
 	next http.RoundTripper
-	mu   sync.Mutex
 	urls []string
+	mu   sync.Mutex
 }
 
 func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -173,8 +173,7 @@ func TestChecker_CheckOllama_RedirectCannotReachRemote(t *testing.T) {
 func TestChecker_CheckOllama_RedirectToLoopbackIsAlsoNotFollowed(t *testing.T) {
 	t.Parallel()
 
-	var target *httptest.Server
-	target = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"models":[]}`))
 	}))
