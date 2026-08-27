@@ -120,7 +120,7 @@ func TestSQLiteStore_TaskLifecycle(t *testing.T) {
 	}
 
 	later := first.Add(time.Hour)
-	if err := store.UpsertTask(ctx, TaskRecord{
+	if updateErr := store.UpsertTask(ctx, TaskRecord{
 		TaskID:       "task-1",
 		LastAgent:    "agent-b",
 		SpentUSD:     1.25,
@@ -128,8 +128,8 @@ func TestSQLiteStore_TaskLifecycle(t *testing.T) {
 		RequestCount: 3,
 		FirstSeenAt:  later,
 		LastSeenAt:   later,
-	}); err != nil {
-		t.Fatalf("UpsertTask(update) error = %v", err)
+	}); updateErr != nil {
+		t.Fatalf("UpsertTask(update) error = %v", updateErr)
 	}
 	record, _, err = store.GetTask(ctx, "task-1")
 	if err != nil {
@@ -145,8 +145,8 @@ func TestSQLiteStore_TaskLifecycle(t *testing.T) {
 		t.Fatalf("LastSeenAt = %v, want %v", record.LastSeenAt, later)
 	}
 
-	if err := store.UpsertTask(ctx, TaskRecord{TaskID: "task-0", SpentUSD: 0.1}); err != nil {
-		t.Fatalf("UpsertTask(defaults) error = %v", err)
+	if defaultsErr := store.UpsertTask(ctx, TaskRecord{TaskID: "task-0", SpentUSD: 0.1}); defaultsErr != nil {
+		t.Fatalf("UpsertTask(defaults) error = %v", defaultsErr)
 	}
 	tasks, err := store.ListTasks(ctx)
 	if err != nil {

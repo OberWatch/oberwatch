@@ -381,6 +381,87 @@ func TestProxy_TaskBudgetDisabledWithZeroLimit(t *testing.T) {
 	}
 }
 
+// The Anthropic OpenAI-compatibility route builds its own upstream request, so
+// it strips the task header and settles the reservation through different code
+// than the reverse proxy path.
+func TestProxy_AnthropicCompatStripsTaskHeaderAndSettles(t *testing.T) {
+	t.Parallel()
+
+	var seenTaskHeader atomic.Value
+	seenTaskHeader.Store("unset")
+
+	// One million input tokens on claude-haiku-4-5 costs $1.00.
+	anthropicServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, present := r.Header["X-Oberwatch-Task"]; present {
+			seenTaskHeader.Store(r.Header.Get("X-Oberwatch-Task"))
+		} else {
+			seenTaskHeader.Store("")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"msg_1","model":"claude-haiku-4-5","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1000000,"output_tokens":0}}`))
+	}))
+	t.Cleanup(anthropicServer.Close)
+
+	openAIServer := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(openAIServer.Close)
+
+	cfg := testConfig(openAIServer.URL, anthropicServer.URL)
+	cfg.Gate.TaskBudgetUSD = 5
+	manager := budget.NewManager(cfg.Gate, nil)
+	sink := &recordingSink{}
+	proxyServer, err := New(cfg, Hooks{
+		Budget:   manager,
+		Pricing:  pricing.NewPricingTableFromConfig(cfg.Pricing, nil),
+		CostSink: sink,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	server := newTestServer(t, proxyServer)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("X-Oberwatch-Agent", "task-agent")
+	req.Header.Set("X-Oberwatch-Task", "  compat-task  ")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, body)
+	}
+	if got := seenTaskHeader.Load(); got != "" {
+		t.Fatalf("upstream saw X-Oberwatch-Task = %q, want header stripped", got)
+	}
+
+	view, found := manager.GetTask("compat-task")
+	if !found {
+		t.Fatalf("GetTask(compat-task) found = false; tasks = %#v", manager.ListTasks())
+	}
+	if view.RequestCount != 1 || view.ReservedUSD != 0 || view.InFlight != 0 {
+		t.Fatalf("task view = %#v, want one settled request and no reservation left", view)
+	}
+	if view.SpentUSD < 0.999 || view.SpentUSD > 1.001 {
+		t.Fatalf("task view spent = %v, want $1", view.SpentUSD)
+	}
+	records := sink.snapshot()
+	if len(records) != 1 || records[0].TaskID != "compat-task" {
+		t.Fatalf("cost records = %#v, want one record tagged compat-task", records)
+	}
+}
+
 func TestWriteTaskBudgetError_Defaults(t *testing.T) {
 	t.Parallel()
 

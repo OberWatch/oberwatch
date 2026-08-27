@@ -337,8 +337,8 @@ func TestTaskBudget_PersistsAcrossRestartAndReset(t *testing.T) {
 		t.Fatalf("ReserveTask(after restart) = %#v, want rejection from restored spend", rejected)
 	}
 
-	if err := second.ResetTask("task-1"); err != nil {
-		t.Fatalf("ResetTask() error = %v", err)
+	if resetErr := second.ResetTask("task-1"); resetErr != nil {
+		t.Fatalf("ResetTask() error = %v", resetErr)
 	}
 	view, _ = second.GetTask("task-1")
 	if view.SpentUSD != 0 || view.RequestCount != 0 || view.Status != "active" {
@@ -358,6 +358,139 @@ func TestTaskBudget_PersistsAcrossRestartAndReset(t *testing.T) {
 	}
 	if _, found := second.GetTask("never-seen"); found {
 		t.Fatal("GetTask(unknown) found = true, want false")
+	}
+}
+
+func TestTaskView_ReportsTheCurrentlyEnforcedLimit(t *testing.T) {
+	t.Parallel()
+
+	// The gate does not cap tasks; only premium-agent does.
+	cfg := taskGateConfig(0)
+	cfg.Agents = []config.AgentBudgetConfig{
+		{Name: "premium-agent", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 1},
+	}
+	manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)))
+
+	_, reservation := manager.ReserveTask("premium-agent", "task-1", 1)
+	reservation.Settle(1)
+
+	view, _ := manager.GetTask("task-1")
+	if view.LimitUSD != 1 || view.Status != "exceeded" || view.RemainingUSD != 0 || view.PercentageUsed != 100 {
+		t.Fatalf("view under the premium cap = %#v, want limit 1 and exceeded", view)
+	}
+
+	// The same task driven by an agent with no task cap is not enforced, so the
+	// view must stop advertising a limit that no request would be held to.
+	decision, plain := manager.ReserveTask("plain-agent", "task-1", 5)
+	if !decision.Allowed || decision.Enforced || decision.LimitUSD != 0 {
+		t.Fatalf("plain-agent decision = %#v, want an allowed unenforced reservation", decision)
+	}
+	plain.Settle(5)
+
+	view, _ = manager.GetTask("task-1")
+	if view.LimitUSD != 0 || view.Status != "active" || view.RemainingUSD != 0 || view.PercentageUsed != 0 {
+		t.Fatalf("view after an unenforced request = %#v, want no cap reported", view)
+	}
+	if !approxEqual(view.SpentUSD, 6) || view.RequestCount != 2 {
+		t.Fatalf("view totals = %#v, want spent 6 over 2 requests", view)
+	}
+}
+
+func TestRenameAgent_CarriesPerAgentTaskLimit(t *testing.T) {
+	t.Parallel()
+
+	cfg := taskGateConfig(10)
+	cfg.Agents = []config.AgentBudgetConfig{
+		{Name: "research", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 1},
+	}
+	store := newTaskStore(t)
+	ctx := context.Background()
+	manager, newErr := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)), nil)
+	if newErr != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher() error = %v", newErr)
+	}
+	t.Cleanup(func() {
+		_ = manager.Close()
+	})
+
+	// The agent has to exist in the store before it can be renamed.
+	manager.RecordSpend("research", 1)
+	if err := manager.Flush(ctx); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	_, reservation := manager.ReserveTask("research", "task-1", 0.9)
+	reservation.Settle(0.9)
+
+	if err := manager.RenameAgent(ctx, "research", "research-v2"); err != nil {
+		t.Fatalf("RenameAgent() error = %v", err)
+	}
+
+	if got := manager.TaskLimitUSD("research-v2"); got != 1 {
+		t.Fatalf("TaskLimitUSD(research-v2) = %v, want the $1 task cap to follow the rename", got)
+	}
+	rejected, rejectedReservation := manager.ReserveTask("research-v2", "task-1", 0.2)
+	if rejected.Allowed || rejected.LimitUSD != 1 || rejectedReservation != nil {
+		t.Fatalf("decision after rename = %#v, want rejection under the $1 cap, not the $10 gate cap", rejected)
+	}
+
+	view, found := manager.GetTask("task-1")
+	if !found || view.LastAgent != "research-v2" || view.LimitUSD != 1 {
+		t.Fatalf("view after rename = %#v (found=%v), want the new agent name and its cap", view, found)
+	}
+	record, found, err := store.GetTask(ctx, "task-1")
+	if err != nil || !found || record.LastAgent != "research-v2" {
+		t.Fatalf("persisted record = %#v, %v, %v; want the renamed agent persisted", record, found, err)
+	}
+}
+
+func TestTaskBudget_FailedFlushKeepsEveryTotalDirty(t *testing.T) {
+	t.Parallel()
+
+	// This store is closed by hand below, so it is not registered for cleanup.
+	store, storeErr := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "flush-failure.db"), 0, nil)
+	if storeErr != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", storeErr)
+	}
+	manager, newErr := NewPersistentManagerWithClockAndDispatcher(taskGateConfig(0), nil, store, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)), nil)
+	if newErr != nil {
+		t.Fatalf("NewPersistentManagerWithClockAndDispatcher() error = %v", newErr)
+	}
+	t.Cleanup(func() {
+		// The final flush cannot succeed against a closed store.
+		_ = manager.Close()
+	})
+
+	// Closing the store makes every write fail, which stands in for any
+	// transient storage failure.
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(store) error = %v", err)
+	}
+
+	for _, taskID := range []string{"task-1", "task-2"} {
+		manager.mu.Lock()
+		state := manager.taskStateLocked(taskID, manager.clock.Now())
+		state.spentUSD = 0.5
+		state.requestCount = 1
+		state.dirty = true
+		manager.mu.Unlock()
+	}
+
+	if err := manager.Flush(context.Background()); err == nil {
+		t.Fatal("Flush() error = nil, want the store failure reported")
+	}
+
+	// A dropped dirty flag would lose the settled total for good, and a restart
+	// would then under-count the task. Both tasks must still be pending, not
+	// just the one that failed first.
+	records := manager.snapshotDirtyTaskRecords()
+	if len(records) != 2 {
+		t.Fatalf("dirty tasks after a failed flush = %#v, want both still pending", records)
+	}
+	for _, record := range records {
+		if !approxEqual(record.SpentUSD, 0.5) {
+			t.Fatalf("pending record = %#v, want spent 0.5 preserved", record)
+		}
 	}
 }
 

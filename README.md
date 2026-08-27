@@ -178,9 +178,12 @@ entry can set its own `task_budget_usd`; a value above zero is preferred over
 the gate value, zero inherits it. `task_budget_usd = 0` at the gate level
 disables task budgets.
 
-Task budgets are independent of agent budgets: task spend does not count
-against the agent period budget, and an agent reset or period rollover does not
-touch task spend. The same task ID used by several agents shares one total.
+Task caps and agent budgets are tracked separately and enforced separately. A
+request must fit both: its cost is added to the agent period budget and to the
+task total. Resetting an agent, or an agent period rollover, does not touch task
+spend, and resetting a task does not touch agent spend. The same task ID used by
+several agents shares one total, capped by the task limit of whichever agent
+sends the request.
 
 Before a request is sent upstream, Oberwatch adds the settled spend of the task,
 the estimated cost of requests still in flight, and the estimate for the new

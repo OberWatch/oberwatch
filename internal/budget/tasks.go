@@ -275,10 +275,12 @@ func (m *BudgetManager) ResetTask(taskID string) error {
 }
 
 func (m *BudgetManager) toTaskViewLocked(taskID string, state *taskState) TaskView {
-	limit := state.limitUSD
-	if current := m.taskLimitLocked(normalizeAgent(state.lastAgent)); current > 0 {
-		limit = current
-	}
+	// Report the cap that would actually be enforced for the next request from
+	// the agent that last drove this task. state.limitUSD is only the last
+	// enforced value, so falling back to it would advertise a limit, a
+	// remaining balance and an "exceeded" status for a cap that no longer
+	// applies: an agent without a task cap, or a gate cap set back to zero.
+	limit := m.taskLimitLocked(normalizeAgent(state.lastAgent))
 	remaining := 0.0
 	if limit > 0 {
 		remaining = limit - state.spentUSD - state.reservedUSD
@@ -334,11 +336,20 @@ func (m *BudgetManager) loadPersistedTasks(ctx context.Context) error {
 	return nil
 }
 
+// flushTaskIfNeeded persists the one task that just changed. Task totals are
+// written on every settlement rather than only on the periodic flush, so a
+// restart cannot lose settled spend; writing just the named task keeps that
+// per-request cost independent of how many tasks the process has seen.
 func (m *BudgetManager) flushTaskIfNeeded(taskID string) {
-	if m.store == nil || strings.TrimSpace(taskID) == "" {
+	taskID = strings.TrimSpace(taskID)
+	if m.store == nil || taskID == "" {
 		return
 	}
-	if err := m.flushTasks(context.Background()); err != nil && m.logger != nil {
+	record, ok := m.takeDirtyTaskRecord(taskID)
+	if !ok {
+		return
+	}
+	if err := m.storeTaskRecord(context.Background(), record); err != nil && m.logger != nil {
 		m.logger.Warn("flush task state failed", "task_id", taskID, "error", err)
 	}
 }
@@ -347,12 +358,47 @@ func (m *BudgetManager) flushTasks(ctx context.Context) error {
 	if m.store == nil {
 		return nil
 	}
+	var firstErr error
+	// One failing task must not strand the rest of the batch: their dirty flags
+	// are already cleared, so returning early would drop their totals.
 	for _, record := range m.snapshotDirtyTaskRecords() {
-		if err := m.store.UpsertTask(ctx, record); err != nil {
-			return fmt.Errorf("flush task %q: %w", record.TaskID, err)
+		if err := m.storeTaskRecord(ctx, record); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
+	return firstErr
+}
+
+// storeTaskRecord writes one task total. A failed write puts the dirty flag
+// back: dropping it would lose the settled total for good and let a restart
+// under-count the task, which is the same as raising its cap.
+func (m *BudgetManager) storeTaskRecord(ctx context.Context, record storage.TaskRecord) error {
+	if err := m.store.UpsertTask(ctx, record); err != nil {
+		m.markTaskDirty(record.TaskID)
+		return fmt.Errorf("flush task %q: %w", record.TaskID, err)
+	}
 	return nil
+}
+
+func (m *BudgetManager) markTaskDirty(taskID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if state, ok := m.tasks[taskID]; ok {
+		state.dirty = true
+	}
+}
+
+func (m *BudgetManager) takeDirtyTaskRecord(taskID string) (storage.TaskRecord, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.tasks[taskID]
+	if !ok || !state.dirty {
+		return storage.TaskRecord{}, false
+	}
+	state.dirty = false
+	return taskRecordLocked(taskID, state), true
 }
 
 func (m *BudgetManager) snapshotDirtyTaskRecords() []storage.TaskRecord {
@@ -364,16 +410,20 @@ func (m *BudgetManager) snapshotDirtyTaskRecords() []storage.TaskRecord {
 		if !state.dirty {
 			continue
 		}
-		records = append(records, storage.TaskRecord{
-			TaskID:       taskID,
-			LastAgent:    state.lastAgent,
-			SpentUSD:     state.spentUSD,
-			LimitUSD:     state.limitUSD,
-			RequestCount: state.requestCount,
-			FirstSeenAt:  state.firstSeenAt,
-			LastSeenAt:   state.lastSeenAt,
-		})
+		records = append(records, taskRecordLocked(taskID, state))
 		state.dirty = false
 	}
 	return records
+}
+
+func taskRecordLocked(taskID string, state *taskState) storage.TaskRecord {
+	return storage.TaskRecord{
+		TaskID:       taskID,
+		LastAgent:    state.lastAgent,
+		SpentUSD:     state.spentUSD,
+		LimitUSD:     state.limitUSD,
+		RequestCount: state.requestCount,
+		FirstSeenAt:  state.firstSeenAt,
+		LastSeenAt:   state.lastSeenAt,
+	}
 }
