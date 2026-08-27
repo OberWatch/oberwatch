@@ -6,33 +6,122 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/OberWatch/oberwatch/internal/config"
 )
 
-func TestDefaultModelPricing_IncludesAllConfigSpecModels(t *testing.T) {
+// publishedDefaultRates mirrors the provider list prices recorded in the source
+// note on DefaultModelPricing. Update both together, never one alone.
+var publishedDefaultRates = []ModelPricing{
+	{Model: "gpt-5.6-sol", Provider: "openai", InputPerMillion: 4.00, OutputPerMillion: 20.00},
+	{Model: "gpt-5.6-terra", Provider: "openai", InputPerMillion: 2.00, OutputPerMillion: 12.00},
+	{Model: "gpt-5.6-luna", Provider: "openai", InputPerMillion: 0.20, OutputPerMillion: 1.20},
+	{Model: "claude-fable-5", Provider: "anthropic", InputPerMillion: 10.00, OutputPerMillion: 50.00},
+	{Model: "claude-opus-5", Provider: "anthropic", InputPerMillion: 5.00, OutputPerMillion: 25.00},
+	{Model: "claude-sonnet-5", Provider: "anthropic", InputPerMillion: 2.00, OutputPerMillion: 10.00},
+	{Model: "claude-haiku-4-5", Provider: "anthropic", InputPerMillion: 1.00, OutputPerMillion: 5.00},
+	{Model: "gemini-3.7-flash", Provider: "google", InputPerMillion: 0.75, OutputPerMillion: 3.75},
+	{Model: "gemini-3.5-flash-lite", Provider: "google", InputPerMillion: 0.30, OutputPerMillion: 2.50},
+}
+
+func TestDefaultModelPricing_MatchesPublishedProviderRates(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		wantModel string
-	}{
-		{name: "contains gpt-4o", wantModel: "gpt-4o"},
-		{name: "contains gpt-4o-mini", wantModel: "gpt-4o-mini"},
-		{name: "contains gpt-4.1", wantModel: "gpt-4.1"},
-		{name: "contains gpt-4.1-mini", wantModel: "gpt-4.1-mini"},
-		{name: "contains claude-opus-4-6", wantModel: "claude-opus-4-6"},
-		{name: "contains claude-sonnet-4-6", wantModel: "claude-sonnet-4-6"},
-		{name: "contains claude-haiku-4-5", wantModel: "claude-haiku-4-5"},
-		{name: "contains gemini-2.5-pro", wantModel: "gemini-2.5-pro"},
-		{name: "contains gemini-2.5-flash", wantModel: "gemini-2.5-flash"},
+	defaults := DefaultModelPricing()
+	if len(defaults) != len(publishedDefaultRates) {
+		t.Fatalf("DefaultModelPricing() length = %d, want %d", len(defaults), len(publishedDefaultRates))
+	}
+	if !reflect.DeepEqual(defaults, publishedDefaultRates) {
+		t.Fatalf("DefaultModelPricing() = %#v, want %#v", defaults, publishedDefaultRates)
 	}
 
+	table := NewPricingTable(nil, nil)
+	for _, want := range publishedDefaultRates {
+		want := want
+		t.Run(want.Model, func(t *testing.T) {
+			t.Parallel()
+			got, ok := table.PriceForModel(want.Model)
+			if !ok {
+				t.Fatalf("PriceForModel(%q) found = false, want true", want.Model)
+			}
+			if got != want {
+				t.Fatalf("PriceForModel(%q) = %#v, want %#v", want.Model, got, want)
+			}
+		})
+	}
+}
+
+func TestDefaultModelPricing_DropsSupersededCatalogEntries(t *testing.T) {
+	t.Parallel()
+
+	// Superseded by the current provider line-ups. They stay usable through
+	// [[pricing]] overrides, but must not ship as defaults.
+	superseded := []string{
+		"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini",
+		"claude-opus-4-6", "claude-sonnet-4-6",
+		"gemini-2.5-pro", "gemini-2.5-flash",
+	}
+
+	table := NewPricingTable(nil, nil)
+	for _, model := range superseded {
+		model := model
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			if _, ok := table.PriceForModel(model); ok {
+				t.Fatalf("PriceForModel(%q) found = true, want false", model)
+			}
+		})
+	}
+}
+
+func TestDefaultModelPricing_MatchesConfigDefaults(t *testing.T) {
+	t.Parallel()
+
+	configDefaults := config.DefaultConfig().Pricing
 	defaults := DefaultModelPricing()
-	if len(defaults) != len(tests) {
-		t.Fatalf("DefaultModelPricing() length = %d, want %d", len(defaults), len(tests))
+	if len(configDefaults) != len(defaults) {
+		t.Fatalf("config default pricing length = %d, want %d", len(configDefaults), len(defaults))
+	}
+	for i, want := range defaults {
+		got := configDefaults[i]
+		if got.Model != want.Model || string(got.Provider) != want.Provider ||
+			got.InputPerMillion != want.InputPerMillion || got.OutputPerMillion != want.OutputPerMillion {
+			t.Fatalf("config pricing[%d] = %#v, want %#v", i, got, want)
+		}
+	}
+}
+
+func TestPriceForModel_AliasesAndVersionedIDs(t *testing.T) {
+	t.Parallel()
+
+	//nolint:govet // keep table fields readable for rate assertions.
+	tests := []struct {
+		name       string
+		model      string
+		wantInput  float64
+		wantOutput float64
+	}{
+		{
+			name:       "anthropic dated snapshot resolves to its alias rate",
+			model:      "claude-haiku-4-5-20251001",
+			wantInput:  1.00,
+			wantOutput: 5.00,
+		},
+		{
+			name:       "anthropic dateless id is its own pinned snapshot",
+			model:      "claude-opus-5",
+			wantInput:  5.00,
+			wantOutput: 25.00,
+		},
+		{
+			name:       "model ids are matched case-insensitively after trimming",
+			model:      "  GPT-5.6-Sol  ",
+			wantInput:  4.00,
+			wantOutput: 20.00,
+		},
 	}
 
 	table := NewPricingTable(nil, nil)
@@ -40,9 +129,13 @@ func TestDefaultModelPricing_IncludesAllConfigSpecModels(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, ok := table.PriceForModel(tt.wantModel)
+			got, ok := table.PriceForModel(tt.model)
 			if !ok {
-				t.Fatalf("PriceForModel(%q) found = false, want true", tt.wantModel)
+				t.Fatalf("PriceForModel(%q) found = false, want true", tt.model)
+			}
+			if got.InputPerMillion != tt.wantInput || got.OutputPerMillion != tt.wantOutput {
+				t.Fatalf("PriceForModel(%q) = input:%v output:%v, want input:%v output:%v",
+					tt.model, got.InputPerMillion, got.OutputPerMillion, tt.wantInput, tt.wantOutput)
 			}
 		})
 	}
@@ -88,7 +181,7 @@ func TestCalculateCost_AnthropicSnapshotModelUsesBasePricing(t *testing.T) {
 	table := NewPricingTable(nil, nil)
 
 	got := table.CalculateCost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
-	want := 6.0
+	want := 6.0 // $1.00 input + $5.00 output per million tokens
 	if math.Abs(got-want) > 1e-9 {
 		t.Fatalf("CalculateCost(snapshot model) = %v, want %v", got, want)
 	}
@@ -107,9 +200,9 @@ func TestPricingOverrides_TableDriven(t *testing.T) {
 	}{
 		{
 			name:  "override existing model price",
-			model: "gpt-4o",
+			model: "gpt-5.6-terra",
 			overrides: []ModelPricing{
-				{Model: "gpt-4o", Provider: "openai", InputPerMillion: 3.00, OutputPerMillion: 12.00},
+				{Model: "gpt-5.6-terra", Provider: "openai", InputPerMillion: 3.00, OutputPerMillion: 12.00},
 			},
 			inputToken:  1_000_000,
 			outputToken: 1_000_000,
@@ -162,9 +255,9 @@ func TestNewPricingTableFromConfig_TableDriven(t *testing.T) {
 		{
 			name: "applies config override on default model",
 			entries: []config.PricingEntry{
-				{Model: "claude-sonnet-4-6", Provider: config.ProviderAnthropic, InputPerMillion: 9.00, OutputPerMillion: 9.50},
+				{Model: "claude-sonnet-5", Provider: config.ProviderAnthropic, InputPerMillion: 9.00, OutputPerMillion: 9.50},
 			},
-			model:           "claude-sonnet-4-6",
+			model:           "claude-sonnet-5",
 			wantInputPrice:  9.00,
 			wantOutputPrice: 9.50,
 		},
@@ -342,10 +435,10 @@ func TestCalculateCost_PackageLevelFunction(t *testing.T) {
 	}{
 		{
 			name:           "package helper uses built-in defaults",
-			model:          "gpt-4.1",
+			model:          "gpt-5.6-terra",
 			inputTokens:    1000,
 			outputTokens:   500,
-			wantCostBounds: [2]float64{0.0059, 0.0061},
+			wantCostBounds: [2]float64{0.0079, 0.0081},
 		},
 	}
 

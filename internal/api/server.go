@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -15,11 +16,19 @@ import (
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/budget"
 	"github.com/OberWatch/oberwatch/internal/config"
+	"github.com/OberWatch/oberwatch/internal/provider"
 	"github.com/OberWatch/oberwatch/internal/storage"
 )
 
 const (
 	basePath = "/_oberwatch/api/v1"
+
+	// providerStatusTTL is how long a provider status snapshot is served
+	// before it is refreshed. Every served row also carries observed_at, so a
+	// reader never has to trust this window on its own. A refresh is started in
+	// the background when a request finds the snapshot older than this; the
+	// request itself is answered from the snapshot it already has.
+	providerStatusTTL = 60 * time.Second
 )
 
 var validAgentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -32,12 +41,29 @@ type Server struct {
 	store  storage.Store
 	mux    *http.ServeMux
 
-	startedAt      time.Time
-	providerHealth map[string]string
-	version        string
-	storageBackend string
-	pricing        []config.PricingEntry
-	broker         *broker
+	startedAt       time.Time
+	version         string
+	storageBackend  string
+	pricing         []config.PricingEntry
+	broker          *broker
+	providerChecker providerStatusChecker
+	ollamaBaseURL   string
+
+	// now is the clock used for provider status freshness. Tests replace it.
+	now func() time.Time
+
+	providerMu         sync.RWMutex
+	providerRows       []provider.StatusRow
+	providerObservedAt time.Time
+	providerRefreshing bool
+}
+
+// providerStatusChecker probes public provider availability. provider.Checker
+// satisfies this; tests may substitute a fake to avoid real network calls.
+type providerStatusChecker interface {
+	CheckOpenAI(ctx context.Context) provider.StatusRow
+	CheckAnthropic(ctx context.Context) provider.StatusRow
+	CheckOllama(ctx context.Context, baseURL string) (provider.StatusRow, bool)
 }
 
 //nolint:govet // Keep broker fields grouped for lock+client ownership clarity.
@@ -55,28 +81,177 @@ type sseEvent struct {
 // New builds a management API server.
 func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.Store, version string) *Server {
 	if strings.TrimSpace(version) == "" {
-		version = "0.1.2"
+		version = "0.1.3"
 	}
 
 	server := &Server{
-		budget:         budgetManager,
-		store:          store,
-		mux:            http.NewServeMux(),
-		startedAt:      time.Now().UTC(),
-		version:        version,
-		storageBackend: string(cfg.Trace.Storage),
-		pricing:        append([]config.PricingEntry(nil), cfg.Pricing...),
-		providerHealth: map[string]string{
-			"openai":    providerStatus(cfg.Upstream.OpenAI.BaseURL),
-			"anthropic": providerStatus(cfg.Upstream.Anthropic.BaseURL),
-			"ollama":    providerStatus(cfg.Upstream.Ollama.BaseURL),
+		budget:          budgetManager,
+		store:           store,
+		mux:             http.NewServeMux(),
+		startedAt:       time.Now().UTC(),
+		version:         version,
+		storageBackend:  string(cfg.Trace.Storage),
+		pricing:         append([]config.PricingEntry(nil), cfg.Pricing...),
+		providerChecker: provider.NewChecker(),
+		ollamaBaseURL:   cfg.Upstream.Ollama.BaseURL,
+		now:             func() time.Time { return time.Now().UTC() },
+		providerRows: []provider.StatusRow{
+			pendingProviderRow("openai", "OpenAI"),
+			pendingProviderRow("anthropic", "Anthropic"),
 		},
 		broker: &broker{
 			clients: make(map[chan sseEvent]struct{}),
 		},
 	}
 	server.registerRoutes()
+
+	// Warm the snapshot so the first dashboard load sees real data. Startup
+	// never waits on this.
+	go server.refreshProviderStatus(context.Background())
+
 	return server
+}
+
+// pendingProviderRow is the placeholder shown before the first background
+// probe completes. It must never claim a status we have not yet verified, and
+// it carries no observed_at because nothing has been observed yet.
+func pendingProviderRow(providerName, label string) provider.StatusRow {
+	return provider.StatusRow{
+		Provider: providerName,
+		Label:    label,
+		Status:   provider.StatusUnavailable,
+		Public:   true,
+		Detail:   "Waiting for the first public status feed check.",
+	}
+}
+
+// refreshProviderStatus probes every provider once and replaces the cached
+// rows. All probes run in parallel under a single provider.ProbeTimeout
+// budget, so one refresh is bounded by that timeout however many providers
+// there are. It returns false when another refresh already holds the slot:
+// probes never overlap.
+func (s *Server) refreshProviderStatus(ctx context.Context) bool {
+	if !s.beginProviderRefresh() {
+		return false
+	}
+	defer s.endProviderRefresh()
+
+	ctx, cancel := context.WithTimeout(ctx, provider.ProbeTimeout)
+	defer cancel()
+
+	var (
+		waitGroup    sync.WaitGroup
+		openAIRow    provider.StatusRow
+		anthropicRow provider.StatusRow
+		ollamaRow    provider.StatusRow
+		ollamaOK     bool
+	)
+
+	waitGroup.Add(3)
+	go func() {
+		defer waitGroup.Done()
+		openAIRow = s.providerChecker.CheckOpenAI(ctx)
+	}()
+	go func() {
+		defer waitGroup.Done()
+		anthropicRow = s.providerChecker.CheckAnthropic(ctx)
+	}()
+	go func() {
+		defer waitGroup.Done()
+		ollamaRow, ollamaOK = s.providerChecker.CheckOllama(ctx, s.ollamaBaseURL)
+	}()
+	waitGroup.Wait()
+
+	observedAt := s.nowUTC()
+
+	// Fixed row order: the public feeds first, then the local server. Probe
+	// completion order must not reorder the table the user reads.
+	rows := make([]provider.StatusRow, 0, 3)
+	rows = append(rows, stampObservedAt(openAIRow, observedAt), stampObservedAt(anthropicRow, observedAt))
+	if ollamaOK {
+		rows = append(rows, stampObservedAt(ollamaRow, observedAt))
+	}
+
+	s.providerMu.Lock()
+	s.providerRows = rows
+	s.providerObservedAt = observedAt
+	s.providerMu.Unlock()
+
+	return true
+}
+
+// stampObservedAt records when a row was observed, so a reader can tell a
+// current status from one that has gone stale.
+func stampObservedAt(row provider.StatusRow, observedAt time.Time) provider.StatusRow {
+	stamped := observedAt
+	row.ObservedAt = &stamped
+	return row
+}
+
+// beginProviderRefresh claims the single refresh slot.
+func (s *Server) beginProviderRefresh() bool {
+	s.providerMu.Lock()
+	defer s.providerMu.Unlock()
+
+	if s.providerRefreshing {
+		return false
+	}
+	s.providerRefreshing = true
+	return true
+}
+
+func (s *Server) endProviderRefresh() {
+	s.providerMu.Lock()
+	s.providerRefreshing = false
+	s.providerMu.Unlock()
+}
+
+// providerStatusStale reports whether the cached rows have aged past the TTL.
+func (s *Server) providerStatusStale() bool {
+	s.providerMu.RLock()
+	observedAt := s.providerObservedAt
+	s.providerMu.RUnlock()
+
+	if observedAt.IsZero() {
+		return true
+	}
+	return s.nowUTC().Sub(observedAt) >= providerStatusTTL
+}
+
+// ensureFreshProviderStatus starts a refresh when the snapshot has aged past
+// the TTL. It always returns immediately: the caller answers from the rows it
+// already has rather than waiting on the network.
+func (s *Server) ensureFreshProviderStatus() {
+	if !s.providerStatusStale() {
+		return
+	}
+	go s.refreshProviderStatus(context.Background())
+}
+
+// providerStatusSnapshot returns a defensive copy of the current provider
+// status rows for serving over the API.
+func (s *Server) providerStatusSnapshot() []provider.StatusRow {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+
+	rows := make([]provider.StatusRow, len(s.providerRows))
+	copy(rows, s.providerRows)
+	return rows
+}
+
+// providerStatusObservedAt returns when the cached rows were observed, or the
+// zero time before the first probe finished.
+func (s *Server) providerStatusObservedAt() time.Time {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+	return s.providerObservedAt
+}
+
+func (s *Server) nowUTC() time.Time {
+	if s.now == nil {
+		return time.Now().UTC()
+	}
+	return s.now()
 }
 
 // ServeHTTP routes requests through auth and endpoint handlers.
@@ -187,6 +362,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/resume", s.handleResume)
 	s.mux.HandleFunc(basePath+"/costs", s.handleCosts)
 	s.mux.HandleFunc(basePath+"/costs/export", s.handleCostsExport)
+	s.mux.HandleFunc(basePath+"/tasks", s.handleTasks)
+	s.mux.HandleFunc(basePath+"/tasks/", s.handleTaskByID)
 	s.mux.HandleFunc(basePath+"/agents", s.handleAgents)
 	s.mux.HandleFunc(basePath+"/agents/", s.handleAgentByName)
 	s.mux.HandleFunc(basePath+"/stream", s.handleStream)
@@ -198,13 +375,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refresh in the background when the snapshot has aged out. This request is
+	// answered from the current snapshot either way.
+	s.ensureFreshProviderStatus()
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "ok",
 		"version":         s.version,
 		"uptime_seconds":  int(time.Since(s.startedAt).Seconds()),
 		"storage_backend": s.storageBackend,
 		"emergency_stop":  s.budget != nil && s.budget.EmergencyStop(),
-		"providers":       s.providerHealth,
+		"providers":       s.providerStatusSnapshot(),
 	})
 }
 
@@ -506,6 +687,103 @@ func (s *Server) handleCostsExport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(csvData)); err != nil {
 		return
+	}
+}
+
+func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+	if s.budget == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+		return
+	}
+
+	views := s.budget.ListTasks()
+	tasks := make([]map[string]any, 0, len(views))
+	for _, view := range views {
+		tasks = append(tasks, taskViewPayload(view))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
+	if s.budget == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+		return
+	}
+
+	taskID, action, ok := parseTaskPath(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "task path not found", "", 0, 0)
+		return
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		view, found := s.budget.GetTask(taskID)
+		if !found {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("task %q not found", taskID), "", 0, 0)
+			return
+		}
+		writeJSON(w, http.StatusOK, taskViewPayload(view))
+	case action == "reset" && r.Method == http.MethodPost:
+		if err := s.budget.ResetTask(taskID); err != nil {
+			if errors.Is(err, storage.ErrTaskNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("task %q not found", taskID), "", 0, 0)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+			return
+		}
+		view, _ := s.budget.GetTask(taskID)
+		s.publish("task_reset", map[string]any{"task_id": taskID})
+		writeJSON(w, http.StatusOK, taskViewPayload(view))
+	case action == "":
+		writeMethodNotAllowed(w)
+	case action == "reset":
+		writeMethodNotAllowed(w)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "task action not found", "", 0, 0)
+	}
+}
+
+func parseTaskPath(path string) (string, string, bool) {
+	trimmed := strings.TrimPrefix(path, basePath+"/tasks/")
+	trimmed = strings.Trim(trimmed, "/")
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.Split(trimmed, "/")
+	taskID := strings.TrimSpace(parts[0])
+	if taskID == "" {
+		return "", "", false
+	}
+	switch len(parts) {
+	case 1:
+		return taskID, "", true
+	case 2:
+		return taskID, parts[1], true
+	default:
+		return "", "", false
+	}
+}
+
+func taskViewPayload(view budget.TaskView) map[string]any {
+	return map[string]any{
+		"task_id":         view.TaskID,
+		"status":          view.Status,
+		"last_agent":      view.LastAgent,
+		"limit_usd":       view.LimitUSD,
+		"spent_usd":       view.SpentUSD,
+		"reserved_usd":    view.ReservedUSD,
+		"remaining_usd":   view.RemainingUSD,
+		"percentage_used": view.PercentageUsed,
+		"request_count":   view.RequestCount,
+		"in_flight":       view.InFlight,
+		"first_seen_at":   view.FirstSeenAt.UTC().Format(time.RFC3339),
+		"last_seen_at":    view.LastSeenAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -843,6 +1121,7 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 	query := storage.CostQuery{
 		Agent:   strings.TrimSpace(r.URL.Query().Get("agent")),
 		Model:   strings.TrimSpace(r.URL.Query().Get("model")),
+		Task:    strings.TrimSpace(r.URL.Query().Get("task")),
 		GroupBy: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group_by"))),
 	}
 	if query.GroupBy != "" {
@@ -948,13 +1227,6 @@ func writeError(w http.ResponseWriter, statusCode int, code string, message stri
 	if _, err := w.Write(encoded); err != nil {
 		return
 	}
-}
-
-func providerStatus(baseURL string) string {
-	if strings.TrimSpace(baseURL) == "" {
-		return "unreachable"
-	}
-	return "reachable"
 }
 
 type sinkFunc func(storage.CostRecord)

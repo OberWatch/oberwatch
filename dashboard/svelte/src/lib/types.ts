@@ -1,7 +1,11 @@
+export type ProviderAvailability = 'operational' | 'degraded' | 'outage' | 'status_unavailable';
+
 export interface ProviderStatus {
-  openai: string;
-  anthropic: string;
-  ollama: string;
+  provider: string;
+  label: string;
+  status: ProviderAvailability;
+  public: boolean;
+  detail: string;
 }
 
 export interface HealthResponse {
@@ -10,7 +14,7 @@ export interface HealthResponse {
   uptime_seconds: number;
   storage_backend?: string;
   emergency_stop?: boolean;
-  providers: ProviderStatus;
+  providers: ProviderStatus[];
 }
 
 export interface AuthStatusResponse {

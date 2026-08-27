@@ -168,6 +168,42 @@ Current behavior includes:
 - automatic recovery after period reset for budget-exceeded kills
 - emergency stop across all agent traffic without taking the control plane offline
 
+### Per-task budgets
+
+Set `gate.task_budget_usd` to cap the lifetime spend of one task. A task is
+identified by the `X-Oberwatch-Task` request header, which is stripped before
+the request reaches the provider. Requests without the header, or with a blank
+value, are not task-budgeted and never share a bucket. A `[[gate.agents]]`
+entry can set its own `task_budget_usd`; a value above zero is preferred over
+the gate value, zero inherits it. `task_budget_usd = 0` at the gate level
+disables task budgets.
+
+Task caps and agent budgets are tracked separately and enforced separately. A
+request must fit both: its cost is added to the agent period budget and to the
+task total. Resetting an agent, or an agent period rollover, does not touch task
+spend, and resetting a task does not touch agent spend. The same task ID used by
+several agents shares one total, capped by the task limit of whichever agent
+sends the request.
+
+Before a request is sent upstream, Oberwatch adds the settled spend of the task,
+the estimated cost of requests still in flight, and the estimate for the new
+request. If that projection exceeds the cap the request is rejected with HTTP
+429 and this body:
+
+```json
+{"error":{"code":"task_budget_exceeded","message":"...","agent":"research-agent","task_id":"job-42",
+  "task_budget_limit_usd":5,"task_budget_spent_usd":4.9,"task_budget_reserved_usd":0.05,"task_budget_projected_usd":5.1}}
+```
+
+Settled task totals are persisted in SQLite and restored on restart. In-flight
+estimates are not persisted because an interrupted request never completes.
+
+Management endpoints:
+- `GET /_oberwatch/api/v1/tasks` lists task budgets
+- `GET /_oberwatch/api/v1/tasks/{task_id}` returns one task
+- `POST /_oberwatch/api/v1/tasks/{task_id}/reset` clears the settled spend of a task
+- `GET /_oberwatch/api/v1/costs?task={task_id}` and `/costs/export?task={task_id}` filter cost rows on the exact task ID
+
 ## Dashboard
 
 The embedded dashboard is part of the main binary.
@@ -237,13 +273,13 @@ Oberwatch publishes images across two registries with different intent.
 
 | Channel | Registry | Purpose |
 | --- | --- | --- |
-| `latest`, `0.1`, `0.1.2` | Docker Hub + GHCR | Stable tagged releases |
+| `latest`, `0.1`, `0.1.3` | Docker Hub + GHCR | Stable tagged releases |
 | `beta` | GHCR | Preview build from `main` |
 | `staging` | GHCR | Integration/staging build |
 | `sha-<commit>` | GHCR | Immutable branch build for debugging and verification |
 
 Recommended usage:
-- Production: `kaissb/oberwatch:0.1.2` or `kaissb/oberwatch:latest`
+- Production: `kaissb/oberwatch:0.1.3` or `kaissb/oberwatch:latest`
 - Preview testing: `ghcr.io/oberwatch/oberwatch:beta`
 - Staging environments: `ghcr.io/oberwatch/oberwatch:staging`
 
@@ -277,7 +313,6 @@ Project docs:
 - [SECURITY.md](./SECURITY.md)
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AI_CODING.md](./AI_CODING.md)
-- [CLAUDE.md](./CLAUDE.md)
 
 ## Contributing
 

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/OberWatch/oberwatch/internal/config"
 )
 
@@ -628,5 +630,51 @@ sync_linux_service_state
 				t.Fatalf("best-effort copy arguments =\n%s\nwant:\n%s", calls, want)
 			}
 		})
+	}
+}
+
+// installerDefaultConfig runs the installer's own write_default_config helper and
+// returns exactly what a fresh install would land on disk.
+func installerDefaultConfig(t *testing.T) string {
+	t.Helper()
+	library := installerLibrary(t)
+	target := filepath.Join(t.TempDir(), "oberwatch.toml")
+	snippet := `. "$1"
+write_default_config "$2"
+`
+	if output, err := runShellSnippet(t, snippet, library, target); err != nil {
+		t.Fatalf("write_default_config failed: %v\n%s", err, output)
+	}
+
+	contents, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	return string(contents)
+}
+
+func TestInstallerDefaultConfigHasNoInventedAgents(t *testing.T) {
+	t.Parallel()
+
+	contents := installerDefaultConfig(t)
+
+	cfg := config.DefaultConfig()
+	if _, err := toml.Decode(contents, &cfg); err != nil {
+		t.Fatalf("toml.Decode() error = %v", err)
+	}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("config.Validate() error = %v", err)
+	}
+	if len(cfg.Gate.Agents) != 0 {
+		t.Fatalf("installer default config declares %d gate.agents, want 0 on a fresh install", len(cfg.Gate.Agents))
+	}
+	if len(cfg.Gate.APIKeyMap) != 0 {
+		t.Fatalf("installer default config declares %d gate.api_key_map entries, want 0", len(cfg.Gate.APIKeyMap))
+	}
+
+	for _, name := range []string{"email-agent", "finance-agent"} {
+		if strings.Contains(contents, name) {
+			t.Fatalf("installer default config still mentions the invented agent %q", name)
+		}
 	}
 }

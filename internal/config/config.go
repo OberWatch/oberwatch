@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -95,7 +94,12 @@ type GateConfig struct {
 	APIKeyMap             []APIKeyMapEntry     `toml:"api_key_map"`
 	Runaway               RunawayConfig        `toml:"runaway"`
 	DowngradeThresholdPct float64              `toml:"downgrade_threshold_pct"`
-	Enabled               bool                 `toml:"enabled"`
+	// TaskBudgetUSD caps the lifetime spend of one task, identified by the
+	// X-Oberwatch-Task request header. Task spend never resets with a budget
+	// period; it can only be reset through the management API. Zero disables
+	// task budget enforcement.
+	TaskBudgetUSD float64 `toml:"task_budget_usd"`
+	Enabled       bool    `toml:"enabled"`
 }
 
 // BudgetLimitConfig defines a budget limit and reset period.
@@ -118,6 +122,9 @@ type AgentBudgetConfig struct {
 	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
 	DowngradeChain []string     `toml:"downgrade_chain"`
 	LimitUSD       float64      `toml:"limit_usd"`
+	// TaskBudgetUSD, when greater than zero, is preferred over gate.task_budget_usd
+	// for tasks driven by this agent. Zero inherits the gate-level value.
+	TaskBudgetUSD float64 `toml:"task_budget_usd"`
 }
 
 // BudgetPeriod is a budget reset window.
@@ -252,7 +259,7 @@ func DefaultConfig() Config {
 		},
 		Gate: GateConfig{
 			Enabled:               true,
-			DefaultDowngradeChain: []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"},
+			DefaultDowngradeChain: []string{"claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"},
 			DowngradeThresholdPct: 80,
 			AlertThresholdsPct:    []float64{50, 80, 100},
 			GlobalBudget: BudgetLimitConfig{
@@ -303,39 +310,26 @@ func DefaultConfig() Config {
 
 func defaultPricing() []PricingEntry {
 	return []PricingEntry{
-		{Model: "gpt-4o", Provider: ProviderOpenAI, InputPerMillion: 2.50, OutputPerMillion: 10.00},
-		{Model: "gpt-4o-mini", Provider: ProviderOpenAI, InputPerMillion: 0.15, OutputPerMillion: 0.60},
-		{Model: "gpt-4.1", Provider: ProviderOpenAI, InputPerMillion: 2.00, OutputPerMillion: 8.00},
-		{Model: "gpt-4.1-mini", Provider: ProviderOpenAI, InputPerMillion: 0.40, OutputPerMillion: 1.60},
-		{Model: "claude-opus-4-6", Provider: ProviderAnthropic, InputPerMillion: 5.00, OutputPerMillion: 25.00},
-		{Model: "claude-sonnet-4-6", Provider: ProviderAnthropic, InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		{Model: "gpt-5.6-sol", Provider: ProviderOpenAI, InputPerMillion: 4.00, OutputPerMillion: 20.00},
+		{Model: "gpt-5.6-terra", Provider: ProviderOpenAI, InputPerMillion: 2.00, OutputPerMillion: 12.00},
+		{Model: "gpt-5.6-luna", Provider: ProviderOpenAI, InputPerMillion: 0.20, OutputPerMillion: 1.20},
+		{Model: "claude-fable-5", Provider: ProviderAnthropic, InputPerMillion: 10.00, OutputPerMillion: 50.00},
+		{Model: "claude-opus-5", Provider: ProviderAnthropic, InputPerMillion: 5.00, OutputPerMillion: 25.00},
+		{Model: "claude-sonnet-5", Provider: ProviderAnthropic, InputPerMillion: 2.00, OutputPerMillion: 10.00},
 		{Model: "claude-haiku-4-5", Provider: ProviderAnthropic, InputPerMillion: 1.00, OutputPerMillion: 5.00},
-		{Model: "gemini-2.5-pro", Provider: ProviderGoogle, InputPerMillion: 1.25, OutputPerMillion: 10.00},
-		{Model: "gemini-2.5-flash", Provider: ProviderGoogle, InputPerMillion: 0.15, OutputPerMillion: 0.60},
+		{Model: "gemini-3.7-flash", Provider: ProviderGoogle, InputPerMillion: 0.75, OutputPerMillion: 3.75},
+		{Model: "gemini-3.5-flash-lite", Provider: ProviderGoogle, InputPerMillion: 0.30, OutputPerMillion: 2.50},
 	}
 }
 
 // Load loads, overrides, and validates a configuration file.
 func Load(path string) (Config, error) {
-	resolvedPath, err := resolveConfigPath(path)
+	resolvedPath, source, err := resolveConfigPathWithSource(path)
 	if err != nil {
 		return Config{}, err
 	}
 
-	cfg := DefaultConfig()
-	if _, err := toml.DecodeFile(resolvedPath, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config %q: %w", resolvedPath, err)
-	}
-
-	if err := applyEnvOverrides(&cfg, os.Environ()); err != nil {
-		return Config{}, err
-	}
-
-	if err := Validate(cfg); err != nil {
-		return Config{}, fmt.Errorf("validate config %q: %w", resolvedPath, err)
-	}
-
-	return cfg, nil
+	return loadResolved(resolvedPath, source)
 }
 
 // LoadRuntime loads a runtime configuration. If no explicit path is provided and
@@ -369,28 +363,9 @@ func LoadRuntime(path string) (Config, string, error) {
 	return cfg, "(defaults/env only)", nil
 }
 
-func resolveConfigPath(path string) (string, error) {
-	if path != "" {
-		return path, nil
-	}
-
-	found := FindConfigFile()
-	if found == "" {
-		return "", fmt.Errorf("no config file found; checked --config, ./oberwatch.toml, $HOME/.config/oberwatch/oberwatch.toml, and /etc/oberwatch/oberwatch.toml")
-	}
-
-	return found, nil
-}
-
 // FindConfigFile returns the first config file found in the documented search order.
 func FindConfigFile() string {
-	candidates := []string{"./oberwatch.toml"}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates = append(candidates, filepath.Join(home, ".config", "oberwatch", "oberwatch.toml"))
-	}
-	candidates = append(candidates, "/etc/oberwatch/oberwatch.toml")
-
-	for _, candidate := range candidates {
+	for _, candidate := range configSearchCandidates() {
 		info, err := os.Stat(candidate)
 		if err == nil && !info.IsDir() {
 			return candidate

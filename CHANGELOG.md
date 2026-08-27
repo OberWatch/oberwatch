@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-27
+
+### Added
+- Per-task budgets: `gate.task_budget_usd` and per-agent `task_budget_usd` cap the lifetime spend of a task identified by `X-Oberwatch-Task`
+- Task cap checks include in-flight estimates and reject with a structured `task_budget_exceeded` 429 before the request reaches the provider
+- Task spend totals persisted in SQLite (schema v4) and restored on restart
+- `GET /tasks`, `GET /tasks/{task_id}`, and `POST /tasks/{task_id}/reset` management endpoints
+- `task` filter on `GET /costs` and `GET /costs/export`
+- `oberwatch init` writes `./oberwatch.toml` by default, supports `--output` and `--force`, and refuses to overwrite an existing file, directory or symlink without `--force`
+- `oberwatch validate` prints `config <path> is valid` on success, names the file and line for malformed TOML, lists unknown keys and each failing semantic check, and sends onboarding warnings to stderr
+- `scripts/release-smoke.sh` and `make smoke` run the init/validate, runaway kill/enable and task budget contracts against one release-style binary and check that it reports the newest CHANGELOG version
+- `scripts/dev/test-runaway.sh` and `scripts/dev/test-task-budget.sh` end-to-end checks against a mock upstream, and `make test-cli` for `scripts/test-cli-config.sh`
+
+### Changed
+- `GET /tasks` reports the task cap that the next request would be held to instead of the last cap that applied
+- Task totals are flushed only for the task that settled, and a failed flush keeps every pending total so a restart does not under-count spend
+- `RenameAgent` carries the per-agent task cap and recorded agent across the rename
+
+### Fixed
+- CLI failures were printed twice, once by the command parser and once by `main`
+- `config.Load`, `validate` and the root `--config` flag resolve the config path through one loader, so a missing or unknown-key file fails the same way at runtime as under `validate`
+- A missing config found through the search order reported `--config flag` as its source
+- The starter, example and installer configs no longer describe `admin_token` as a required bearer token; management auth is session-based
+- Provider status reporting reflects the real upstream state
+- `make tools` and `make lint` failed with `Permission denied` because `scripts/dev/install-tools.sh` had no executable bit
+- README listed a project doc that is not in the repository
+
 ## [0.1.2] - 2026-08-26
 
 ### Added

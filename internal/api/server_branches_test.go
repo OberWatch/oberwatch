@@ -359,19 +359,6 @@ func TestServer_StreamUnsupportedWriterAndHelpers(t *testing.T) {
 				assertErrorCode(t, recorder.Body, "config_error")
 			},
 		},
-		{
-			name: "provider status helper",
-			run: func(t *testing.T) {
-				t.Helper()
-
-				if got := providerStatus(""); got != "unreachable" {
-					t.Fatalf("providerStatus(\"\") = %q, want %q", got, "unreachable")
-				}
-				if got := providerStatus("https://api.example.com"); got != "reachable" {
-					t.Fatalf("providerStatus(non-empty) = %q, want %q", got, "reachable")
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -479,6 +466,18 @@ func (f failingStore) SetSetting(context.Context, string, string) error {
 
 func (f failingStore) DeleteSetting(context.Context, string) error {
 	return nil
+}
+
+func (f failingStore) UpsertTask(context.Context, storage.TaskRecord) error {
+	return nil
+}
+
+func (f failingStore) GetTask(context.Context, string) (storage.TaskRecord, bool, error) {
+	return storage.TaskRecord{}, false, nil
+}
+
+func (f failingStore) ListTasks(context.Context) ([]storage.TaskRecord, error) {
+	return nil, nil
 }
 
 func assertErrorCode(t *testing.T, body io.Reader, wantCode string) {

@@ -1186,7 +1186,7 @@ func TestGateMiddleware_BudgetRejectAndDowngrade(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}))
 
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-terra"}`))
 		req.Header.Set("X-Oberwatch-Agent", "agent-a")
 		recorder := httptest.NewRecorder()
 
@@ -1206,7 +1206,7 @@ func TestGateMiddleware_BudgetRejectAndDowngrade(t *testing.T) {
 		cfg.Gate.DefaultBudget.LimitUSD = 10
 		cfg.Gate.DefaultBudget.ActionOnExceed = config.BudgetActionDowngrade
 		cfg.Gate.DowngradeThresholdPct = 50
-		cfg.Gate.DefaultDowngradeChain = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
+		cfg.Gate.DefaultDowngradeChain = []string{"claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"}
 
 		manager := budget.NewManager(cfg.Gate, nil)
 		manager.RecordSpend("agent-b", 6)
@@ -1220,13 +1220,13 @@ func TestGateMiddleware_BudgetRejectAndDowngrade(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadAll() error = %v", err)
 			}
-			if !strings.Contains(string(payload), `"model":"claude-sonnet-4-6"`) {
+			if !strings.Contains(string(payload), `"model":"claude-opus-5"`) {
 				t.Fatalf("rewritten payload = %s, want downgraded model", string(payload))
 			}
 			w.WriteHeader(http.StatusNoContent)
 		}))
 
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-4-6","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"claude-fable-5","stream":false}`))
 		req.Header.Set("X-Oberwatch-Agent", "agent-b")
 		recorder := httptest.NewRecorder()
 
@@ -1281,7 +1281,7 @@ func TestBudgetTrackingBody_FinalizePaths(t *testing.T) {
 		io.NopCloser(strings.NewReader(`{"usage":{"prompt_tokens":100,"completion_tokens":50}}`)),
 		http.StatusOK,
 		"application/json",
-		budgetRequestMeta{agent: "agent-usage", model: "gpt-4o", provider: "openai"},
+		budgetRequestMeta{agent: "agent-usage", model: "gpt-5.6-terra", provider: "openai"},
 		manager,
 		table,
 		nil,
@@ -1302,7 +1302,7 @@ func TestBudgetTrackingBody_FinalizePaths(t *testing.T) {
 		io.NopCloser(strings.NewReader("upstream failure")),
 		http.StatusBadGateway,
 		"text/plain",
-		budgetRequestMeta{agent: "agent-usage", model: "gpt-4o", provider: "openai"},
+		budgetRequestMeta{agent: "agent-usage", model: "gpt-5.6-terra", provider: "openai"},
 		manager,
 		table,
 		nil,
