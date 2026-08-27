@@ -62,9 +62,12 @@ func newRootCmd() *cobra.Command {
 	}
 
 	rootCmd := &cobra.Command{
-		Use:          "oberwatch",
-		Short:        "Oberwatch — proxy and observability platform for AI agents",
-		SilenceUsage: true,
+		Use:   "oberwatch",
+		Short: "Oberwatch — proxy and observability platform for AI agents",
+		// main() is the single error reporter; without SilenceErrors cobra
+		// prints the same failure a second time as "Error: ...".
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			printed, err := maybePrintVersion(cmd.OutOrStdout(), opts.showVersion)
 			if printed || err != nil {

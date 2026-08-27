@@ -316,12 +316,12 @@ func defaultPricing() []PricingEntry {
 
 // Load loads, overrides, and validates a configuration file.
 func Load(path string) (Config, error) {
-	resolvedPath, _, err := resolveConfigPathWithSource(path)
+	resolvedPath, source, err := resolveConfigPathWithSource(path)
 	if err != nil {
 		return Config{}, err
 	}
 
-	return loadResolved(resolvedPath)
+	return loadResolved(resolvedPath, source)
 }
 
 // LoadRuntime loads a runtime configuration. If no explicit path is provided and

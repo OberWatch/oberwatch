@@ -787,18 +787,7 @@ func TestValidateAndInitCommands(t *testing.T) {
 func TestInitDefaultOutputRoundTripsThroughValidate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(origWD); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
+	t.Chdir(dir)
 
 	initRoot := newRootCmd()
 	var initOut bytes.Buffer
@@ -828,6 +817,22 @@ func TestInitDefaultOutputRoundTripsThroughValidate(t *testing.T) {
 	}
 	if validateErr.Len() != 0 {
 		t.Fatalf("validate stderr = %q, want no warnings for the starter config", validateErr.String())
+	}
+}
+
+func TestRootCmd_ReportsFailuresOnce(t *testing.T) {
+	// main() prints the returned error, so cobra must not also print it.
+	root := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"validate", "--config", filepath.Join(t.TempDir(), "missing.toml")})
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty so main() is the only error reporter", stderr.String())
 	}
 }
 

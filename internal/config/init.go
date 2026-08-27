@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -293,13 +294,28 @@ func GenerateStarter(path string) error {
 // WriteStarter writes StarterTOML to path, creating parent directories as
 // needed. An existing file is only replaced when force is true; otherwise the
 // file is left untouched and an error is returned.
+//
+// Existence is checked with Lstat so a symlink counts as an existing entry:
+// without --force the link is refused rather than followed, which keeps init
+// from writing through a dangling link to some other path.
 func WriteStarter(path string, force bool) error {
-	if info, err := os.Stat(path); err == nil {
+	if path == "" {
+		return fmt.Errorf("output path must not be empty")
+	}
+
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Report the target's type when the link resolves, so a symlinked
+			// directory still gets the clearer message below.
+			if target, targetErr := os.Stat(path); targetErr == nil {
+				info = target
+			}
+		}
 		if info.IsDir() {
 			return fmt.Errorf("output path %q is a directory, want a file path", path)
 		}
 		if !force {
-			return fmt.Errorf("refusing to overwrite existing file %q (use --force to replace it)", path)
+			return errRefuseOverwrite(path)
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %q: %w", path, err)
@@ -308,11 +324,33 @@ func WriteStarter(path string, force bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory for %q: %w", path, err)
 	}
-	if err := os.WriteFile(path, []byte(StarterTOML), 0o644); err != nil {
+
+	// O_EXCL without --force closes the gap between the check above and the
+	// write, so a file that appears in between is never truncated.
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if !force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
+	file, err := os.OpenFile(path, flags, 0o644)
+	if err != nil {
+		if !force && errors.Is(err, os.ErrExist) {
+			return errRefuseOverwrite(path)
+		}
+		return fmt.Errorf("write starter config %q: %w", path, err)
+	}
+	if _, err := file.WriteString(StarterTOML); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write starter config %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
 		return fmt.Errorf("write starter config %q: %w", path, err)
 	}
 
 	return nil
+}
+
+func errRefuseOverwrite(path string) error {
+	return fmt.Errorf("refusing to overwrite existing file %q (use --force to replace it)", path)
 }
 
 // InitSuccessMessage is the stdout text printed after `oberwatch init` writes path.

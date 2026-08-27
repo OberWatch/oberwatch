@@ -20,16 +20,23 @@ const (
 
 // NotFoundError reports that no config file exists at the requested location.
 type NotFoundError struct {
-	// Path is the explicit path that was checked, or empty when the search order was used.
+	// Path is the path that was checked, or empty when the search order found nothing.
 	Path string
+	// Source says how Path was chosen. Defaults to SourceFlag when unset.
+	Source string
 }
 
 // Error describes the missing file and where it was looked for.
 func (e *NotFoundError) Error() string {
-	if e.Path != "" {
-		return fmt.Sprintf("config file %q not found (source: %s)", e.Path, SourceFlag)
+	if e.Path == "" {
+		return "no config file found; checked --config, " + strings.Join(configSearchCandidates(), ", ")
 	}
-	return "no config file found; checked --config, " + strings.Join(configSearchCandidates(), ", ")
+
+	source := e.Source
+	if source == "" {
+		source = SourceFlag
+	}
+	return fmt.Sprintf("config file %q not found (source: %s)", e.Path, source)
 }
 
 // FileReport describes a config file that loaded and validated successfully.
@@ -54,7 +61,7 @@ func ValidateFile(path string) (FileReport, error) {
 		return FileReport{}, err
 	}
 
-	cfg, err := loadResolved(resolvedPath)
+	cfg, err := loadResolved(resolvedPath, source)
 	if err != nil {
 		return FileReport{}, err
 	}
@@ -68,11 +75,13 @@ func ValidateFile(path string) (FileReport, error) {
 }
 
 // loadResolved parses, overrides, and validates an already-resolved path.
-func loadResolved(resolvedPath string) (Config, error) {
+// source is carried through so a file that disappears after the search order
+// picked it is not reported as if it came from --config.
+func loadResolved(resolvedPath, source string) (Config, error) {
 	info, statErr := os.Stat(resolvedPath)
 	switch {
 	case statErr != nil && errors.Is(statErr, os.ErrNotExist):
-		return Config{}, &NotFoundError{Path: resolvedPath}
+		return Config{}, &NotFoundError{Path: resolvedPath, Source: source}
 	case statErr != nil:
 		return Config{}, fmt.Errorf("read config %q: %w", resolvedPath, statErr)
 	case info.IsDir():

@@ -33,6 +33,23 @@ esac
 export HOME="$TEMP_DIR/home"
 mkdir -p "$HOME"
 
+# OBERWATCH_* variables are applied as config overrides, so any left in the
+# caller's environment would change what validate reports.
+while IFS='=' read -r name _; do
+  case "$name" in
+    OBERWATCH_*) unset "$name" ;;
+  esac
+done < <(env)
+
+# The system path is part of the documented search order and cannot be
+# redirected, so the "no config anywhere" checks only hold without it.
+SYSTEM_CONFIG=/etc/oberwatch/oberwatch.toml
+HAVE_SYSTEM_CONFIG=0
+if [ -e "$SYSTEM_CONFIG" ]; then
+  HAVE_SYSTEM_CONFIG=1
+  printf 'NOTE: %s exists; skipping the empty-search-order checks\n' "$SYSTEM_CONFIG" >&2
+fi
+
 failures=0
 STDOUT="$TEMP_DIR/stdout"
 STDERR="$TEMP_DIR/stderr"
@@ -146,14 +163,33 @@ run "$WORK" init --output "$TEMP_DIR/custom"
 expect_exit 'init refuses to write over a directory' 1
 expect_stderr_contains 'init explains the directory refusal' 'is a directory'
 
+# A dangling symlink must not be followed: writing through it would land the
+# config somewhere the user never named.
+ln -s "$TEMP_DIR/symlink-target.toml" "$TEMP_DIR/dangling.toml"
+run "$WORK" init --output "$TEMP_DIR/dangling.toml"
+expect_exit 'init refuses a dangling symlink' 1
+expect_stderr_contains 'init names the refused symlink' 'refusing to overwrite existing file'
+[ ! -e "$TEMP_DIR/symlink-target.toml" ] \
+  && pass 'init did not write through the dangling symlink' \
+  || fail 'init did not write through the dangling symlink'
+
+# --- errors are reported once ------------------------------------------------
+run "$WORK" validate --config "$TEMP_DIR/does-not-exist.toml"
+error_lines=$(grep -c -i -- 'not found' "$STDERR" || true)
+[ "$error_lines" -eq 1 ] \
+  && pass 'a failing command reports its error exactly once' \
+  || fail "a failing command reports its error exactly once (got $error_lines lines)"
+
 # --- validate failure modes --------------------------------------------------
 EMPTY="$TEMP_DIR/empty"
 mkdir -p "$EMPTY"
-run "$EMPTY" validate
-expect_exit 'validate with no config anywhere exits 1' 1
-expect_stdout_empty 'missing search-order config prints nothing on stdout'
-expect_stderr_contains 'missing search-order config lists the search order' 'no config file found; checked --config, ./oberwatch.toml'
-expect_stderr_contains 'missing search-order config lists the system path' '/etc/oberwatch/oberwatch.toml'
+if [ "$HAVE_SYSTEM_CONFIG" -eq 0 ]; then
+  run "$EMPTY" validate
+  expect_exit 'validate with no config anywhere exits 1' 1
+  expect_stdout_empty 'missing search-order config prints nothing on stdout'
+  expect_stderr_contains 'missing search-order config lists the search order' 'no config file found; checked --config, ./oberwatch.toml'
+  expect_stderr_contains 'missing search-order config lists the system path' '/etc/oberwatch/oberwatch.toml'
+fi
 
 run "$EMPTY" validate --config "$TEMP_DIR/does-not-exist.toml"
 expect_exit 'validate with a missing --config path exits 1' 1

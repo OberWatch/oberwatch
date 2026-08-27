@@ -8,23 +8,6 @@ import (
 	"testing"
 )
 
-func chdirForTest(t *testing.T, dir string) {
-	t.Helper()
-
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(origWD); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-}
-
 func TestValidateFile_TableDriven(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -119,7 +102,7 @@ func TestValidateFile_TableDriven(t *testing.T) {
 			} else {
 				// HOME is redirected so the user's real config cannot leak into the search.
 				t.Setenv("HOME", t.TempDir())
-				chdirForTest(t, dir)
+				t.Chdir(dir)
 			}
 
 			report, err := ValidateFile(arg)
@@ -221,6 +204,45 @@ func TestWriteStarter_TableDriven(t *testing.T) {
 				t.Fatalf("file content = %q, want %q", truncateForTest(string(data)), truncateForTest(tt.wantContent))
 			}
 		})
+	}
+}
+
+func TestWriteStarter_DoesNotFollowDanglingSymlink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	link := filepath.Join(dir, "oberwatch.toml")
+	target := filepath.Join(dir, "elsewhere.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	err := WriteStarter(link, false)
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("WriteStarter(symlink) error = %v, want 'refusing to overwrite'", err)
+	}
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("WriteStarter wrote through the symlink to %q", target)
+	}
+}
+
+func TestWriteStarter_RejectsEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	if err := WriteStarter("", false); err == nil {
+		t.Fatal("WriteStarter(\"\") error = nil, want non-nil")
+	}
+}
+
+func TestNotFoundError_ReportsSearchOrderSource(t *testing.T) {
+	t.Parallel()
+
+	err := &NotFoundError{Path: "./oberwatch.toml", Source: SourceSearch}
+	if !strings.Contains(err.Error(), SourceSearch) {
+		t.Fatalf("NotFoundError.Error() = %q, want source %q", err.Error(), SourceSearch)
+	}
+	if strings.Contains(err.Error(), SourceFlag) {
+		t.Fatalf("NotFoundError.Error() = %q, must not claim %q", err.Error(), SourceFlag)
 	}
 }
 
