@@ -1144,6 +1144,18 @@ func (s storeFunc) DeleteSetting(context.Context, string) error {
 	return nil
 }
 
+func (s storeFunc) UpsertTask(context.Context, TaskRecord) error {
+	return nil
+}
+
+func (s storeFunc) GetTask(context.Context, string) (TaskRecord, bool, error) {
+	return TaskRecord{}, false, nil
+}
+
+func (s storeFunc) ListTasks(context.Context) ([]TaskRecord, error) {
+	return nil, nil
+}
+
 func TestSQLiteStore_QueryCostsAgentBucketGrouping(t *testing.T) {
 	t.Parallel()
 

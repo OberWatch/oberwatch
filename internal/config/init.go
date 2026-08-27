@@ -112,6 +112,11 @@ downgrade_threshold_pct = 80
 # Default: [50, 80, 100]
 alert_thresholds_pct = [50, 80, 100]
 
+# Lifetime spend cap per task (X-Oberwatch-Task header). Never resets with a
+# period; reset through POST /_oberwatch/api/v1/tasks/{task_id}/reset.
+# Default: 0 (disabled)
+task_budget_usd = 0
+
 [gate.global_budget]
 # Global budget across all agents.
 limit_usd = 0
@@ -143,6 +148,7 @@ method = "header"
 # period = "daily"
 # action_on_exceed = "downgrade"
 # downgrade_chain = ["claude-sonnet-5", "claude-haiku-4-5"]
+# task_budget_usd = 2.00
 
 # Uncomment when method = "api_key".
 # [[gate.api_key_map]]

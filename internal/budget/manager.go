@@ -174,6 +174,10 @@ type BudgetManager struct {
 	globalLimitUSD float64
 	globalPeriod   config.BudgetPeriod
 	globalState    globalBudgetState
+
+	defaultTaskLimit float64
+	agentTaskLimit   map[string]float64
+	tasks            map[string]*taskState
 }
 
 // NewManager creates a budget manager from gate configuration.
@@ -319,6 +323,9 @@ func newManager(
 			periodStartsAt: now,
 			periodResetsAt: nextPeriodReset(now, globalPeriod),
 		},
+		defaultTaskLimit: gate.TaskBudgetUSD,
+		agentTaskLimit:   make(map[string]float64),
+		tasks:            make(map[string]*taskState),
 	}
 
 	for _, entry := range gate.Agents {
@@ -331,10 +338,16 @@ func newManager(
 		}
 		normalized := normalizeAgent(entry.Name)
 		manager.agentPolicy[normalized] = policy
+		if entry.TaskBudgetUSD > 0 {
+			manager.agentTaskLimit[normalized] = entry.TaskBudgetUSD
+		}
 	}
 
 	if persistent && store != nil {
 		if err := manager.loadPersistedAgents(context.Background()); err != nil {
+			return nil, err
+		}
+		if err := manager.loadPersistedTasks(context.Background()); err != nil {
 			return nil, err
 		}
 		manager.flushInterval = 30 * time.Second
@@ -1041,7 +1054,7 @@ func (m *BudgetManager) Flush(ctx context.Context) error {
 			return fmt.Errorf("flush agent %q: %w", record.Name, err)
 		}
 	}
-	return nil
+	return m.flushTasks(ctx)
 }
 
 // RenameAgent changes the runtime and persisted name for one tracked agent.
@@ -1067,6 +1080,24 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 	m.state[newName] = cloneState(state)
 	m.knownAgents[newName] = struct{}{}
 	m.state[newName].dirty = true
+
+	// The per-agent task cap and the agent recorded on each task are part of the
+	// same identity as the policy above. Leaving them behind would silently drop
+	// this agent's task cap back to the gate value after a rename.
+	taskLimit, hadTaskLimit := m.agentTaskLimit[oldName]
+	if hadTaskLimit {
+		delete(m.agentTaskLimit, oldName)
+		m.agentTaskLimit[newName] = taskLimit
+	}
+	renamedTasks := make([]*taskState, 0)
+	for _, task := range m.tasks {
+		if task.lastAgent != oldName {
+			continue
+		}
+		task.lastAgent = newName
+		task.dirty = true
+		renamedTasks = append(renamedTasks, task)
+	}
 	m.mu.Unlock()
 
 	if m.store != nil {
@@ -1078,6 +1109,13 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 			m.agentPolicy[oldName] = policy
 			m.state[oldName] = state
 			m.knownAgents[oldName] = struct{}{}
+			if hadTaskLimit {
+				delete(m.agentTaskLimit, newName)
+				m.agentTaskLimit[oldName] = taskLimit
+			}
+			for _, task := range renamedTasks {
+				task.lastAgent = oldName
+			}
 			m.mu.Unlock()
 			return err
 		}

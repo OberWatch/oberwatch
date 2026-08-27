@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -361,6 +362,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/resume", s.handleResume)
 	s.mux.HandleFunc(basePath+"/costs", s.handleCosts)
 	s.mux.HandleFunc(basePath+"/costs/export", s.handleCostsExport)
+	s.mux.HandleFunc(basePath+"/tasks", s.handleTasks)
+	s.mux.HandleFunc(basePath+"/tasks/", s.handleTaskByID)
 	s.mux.HandleFunc(basePath+"/agents", s.handleAgents)
 	s.mux.HandleFunc(basePath+"/agents/", s.handleAgentByName)
 	s.mux.HandleFunc(basePath+"/stream", s.handleStream)
@@ -684,6 +687,103 @@ func (s *Server) handleCostsExport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(csvData)); err != nil {
 		return
+	}
+}
+
+func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+	if s.budget == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+		return
+	}
+
+	views := s.budget.ListTasks()
+	tasks := make([]map[string]any, 0, len(views))
+	for _, view := range views {
+		tasks = append(tasks, taskViewPayload(view))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
+	if s.budget == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager is not configured", "", 0, 0)
+		return
+	}
+
+	taskID, action, ok := parseTaskPath(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "task path not found", "", 0, 0)
+		return
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		view, found := s.budget.GetTask(taskID)
+		if !found {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("task %q not found", taskID), "", 0, 0)
+			return
+		}
+		writeJSON(w, http.StatusOK, taskViewPayload(view))
+	case action == "reset" && r.Method == http.MethodPost:
+		if err := s.budget.ResetTask(taskID); err != nil {
+			if errors.Is(err, storage.ErrTaskNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("task %q not found", taskID), "", 0, 0)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), "", 0, 0)
+			return
+		}
+		view, _ := s.budget.GetTask(taskID)
+		s.publish("task_reset", map[string]any{"task_id": taskID})
+		writeJSON(w, http.StatusOK, taskViewPayload(view))
+	case action == "":
+		writeMethodNotAllowed(w)
+	case action == "reset":
+		writeMethodNotAllowed(w)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "task action not found", "", 0, 0)
+	}
+}
+
+func parseTaskPath(path string) (string, string, bool) {
+	trimmed := strings.TrimPrefix(path, basePath+"/tasks/")
+	trimmed = strings.Trim(trimmed, "/")
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.Split(trimmed, "/")
+	taskID := strings.TrimSpace(parts[0])
+	if taskID == "" {
+		return "", "", false
+	}
+	switch len(parts) {
+	case 1:
+		return taskID, "", true
+	case 2:
+		return taskID, parts[1], true
+	default:
+		return "", "", false
+	}
+}
+
+func taskViewPayload(view budget.TaskView) map[string]any {
+	return map[string]any{
+		"task_id":         view.TaskID,
+		"status":          view.Status,
+		"last_agent":      view.LastAgent,
+		"limit_usd":       view.LimitUSD,
+		"spent_usd":       view.SpentUSD,
+		"reserved_usd":    view.ReservedUSD,
+		"remaining_usd":   view.RemainingUSD,
+		"percentage_used": view.PercentageUsed,
+		"request_count":   view.RequestCount,
+		"in_flight":       view.InFlight,
+		"first_seen_at":   view.FirstSeenAt.UTC().Format(time.RFC3339),
+		"last_seen_at":    view.LastSeenAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -1021,6 +1121,7 @@ func parseCostQuery(r *http.Request) (storage.CostQuery, error) {
 	query := storage.CostQuery{
 		Agent:   strings.TrimSpace(r.URL.Query().Get("agent")),
 		Model:   strings.TrimSpace(r.URL.Query().Get("model")),
+		Task:    strings.TrimSpace(r.URL.Query().Get("task")),
 		GroupBy: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group_by"))),
 	}
 	if query.GroupBy != "" {

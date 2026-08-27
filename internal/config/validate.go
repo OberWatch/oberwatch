@@ -90,6 +90,9 @@ func validateGate(gate GateConfig) []string {
 	if gate.DefaultBudget.LimitUSD < 0 {
 		problems = append(problems, fmt.Sprintf("gate.default_budget.limit_usd must be non-negative, got %v", gate.DefaultBudget.LimitUSD))
 	}
+	if gate.TaskBudgetUSD < 0 {
+		problems = append(problems, fmt.Sprintf("gate.task_budget_usd must be non-negative, got %v", gate.TaskBudgetUSD))
+	}
 	problems = append(problems, validateBudgetPeriod("gate.global_budget.period", gate.GlobalBudget.Period)...)
 	problems = append(problems, validateBudgetPeriod("gate.default_budget.period", gate.DefaultBudget.Period)...)
 	problems = append(problems, validateBudgetAction("gate.default_budget.action_on_exceed", gate.DefaultBudget.ActionOnExceed)...)
@@ -129,6 +132,9 @@ func validateGate(gate GateConfig) []string {
 		}
 		if agent.LimitUSD < 0 {
 			problems = append(problems, fmt.Sprintf("gate.agents[%d].limit_usd must be non-negative, got %v", i, agent.LimitUSD))
+		}
+		if agent.TaskBudgetUSD < 0 {
+			problems = append(problems, fmt.Sprintf("gate.agents[%d].task_budget_usd must be non-negative, got %v", i, agent.TaskBudgetUSD))
 		}
 		problems = append(problems, validateBudgetPeriod(fmt.Sprintf("gate.agents[%d].period", i), agent.Period)...)
 		problems = append(problems, validateBudgetAction(fmt.Sprintf("gate.agents[%d].action_on_exceed", i), agent.ActionOnExceed)...)
