@@ -182,8 +182,9 @@ enabled = true
 
 # Default model downgrade path when action_on_exceed is "downgrade".
 default_downgrade_chain = [
-  "claude-opus-4-6",
-  "claude-sonnet-4-6",
+  "claude-fable-5",
+  "claude-opus-5",
+  "claude-sonnet-5",
   "claude-haiku-4-5",
 ]
 
@@ -230,34 +231,18 @@ window_seconds = 60
 # Valid values: header, api_key, source_ip
 method = "header"
 
-# Explicit per-agent policies (two example agents configured).
-[[gate.agents]]
-# Stable agent name as seen in X-Oberwatch-Agent header or key mapping.
-name = "email-agent"
-
-# Agent-specific budget limit in USD for the chosen period.
-limit_usd = 10.00
-
-# Budget reset period for this agent.
-period = "daily"
-
-# Enforcement action for this agent.
-action_on_exceed = "downgrade"
-
-# Agent-specific downgrade chain override.
-downgrade_chain = ["claude-sonnet-4-6", "claude-haiku-4-5"]
-
-[[gate.agents]]
-name = "finance-agent"
-limit_usd = 50.00
-period = "weekly"
-action_on_exceed = "reject"
-downgrade_chain = ["gpt-4.1", "gpt-4.1-mini"]
+# Uncomment and adapt a per-agent policy when you are ready to enforce one.
+# [[gate.agents]]
+# name = "my-agent"
+# limit_usd = 10.00
+# period = "daily"
+# action_on_exceed = "downgrade"
+# downgrade_chain = ["claude-sonnet-5", "claude-haiku-4-5"]
 
 # Optional API key prefix-to-agent mapping when identification.method = "api_key".
 # [[gate.api_key_map]]
 # api_key_prefix = "sk-proj-email"
-# agent = "email-agent"
+# agent = "my-agent"
 
 # -----------------------------------------------------------------------------
 # Alert Delivery Settings

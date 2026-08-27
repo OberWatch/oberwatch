@@ -40,18 +40,25 @@ type PricingTable struct {
 	pricing map[string]ModelPricing
 }
 
-// DefaultModelPricing returns the built-in pricing defaults from CONFIG_SPEC.md.
+// DefaultModelPricing returns the built-in pricing defaults from the published
+// provider rate cards. Keep in sync with publishedDefaultRates in pricing_test.go.
+//
+// Only models whose published rate is a single input/output pair belong here.
+// A model billed at different rates above a context threshold cannot be
+// expressed by ModelPricing and would undercount long requests, so it is left
+// out and priced by a [[pricing]] override instead. See contextTieredModels in
+// pricing_catalog_test.go.
 func DefaultModelPricing() []ModelPricing {
 	return []ModelPricing{
-		{Model: "gpt-4o", Provider: "openai", InputPerMillion: 2.50, OutputPerMillion: 10.00},
-		{Model: "gpt-4o-mini", Provider: "openai", InputPerMillion: 0.15, OutputPerMillion: 0.60},
-		{Model: "gpt-4.1", Provider: "openai", InputPerMillion: 2.00, OutputPerMillion: 8.00},
-		{Model: "gpt-4.1-mini", Provider: "openai", InputPerMillion: 0.40, OutputPerMillion: 1.60},
-		{Model: "claude-opus-4-6", Provider: "anthropic", InputPerMillion: 5.00, OutputPerMillion: 25.00},
-		{Model: "claude-sonnet-4-6", Provider: "anthropic", InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		{Model: "gpt-5.6-sol", Provider: "openai", InputPerMillion: 4.00, OutputPerMillion: 20.00},
+		{Model: "gpt-5.6-terra", Provider: "openai", InputPerMillion: 2.00, OutputPerMillion: 12.00},
+		{Model: "gpt-5.6-luna", Provider: "openai", InputPerMillion: 0.20, OutputPerMillion: 1.20},
+		{Model: "claude-fable-5", Provider: "anthropic", InputPerMillion: 10.00, OutputPerMillion: 50.00},
+		{Model: "claude-opus-5", Provider: "anthropic", InputPerMillion: 5.00, OutputPerMillion: 25.00},
+		{Model: "claude-sonnet-5", Provider: "anthropic", InputPerMillion: 2.00, OutputPerMillion: 10.00},
 		{Model: "claude-haiku-4-5", Provider: "anthropic", InputPerMillion: 1.00, OutputPerMillion: 5.00},
-		{Model: "gemini-2.5-pro", Provider: "google", InputPerMillion: 1.25, OutputPerMillion: 10.00},
-		{Model: "gemini-2.5-flash", Provider: "google", InputPerMillion: 0.15, OutputPerMillion: 0.60},
+		{Model: "gemini-3.7-flash", Provider: "google", InputPerMillion: 0.75, OutputPerMillion: 3.75},
+		{Model: "gemini-3.5-flash-lite", Provider: "google", InputPerMillion: 0.30, OutputPerMillion: 2.50},
 	}
 }
 

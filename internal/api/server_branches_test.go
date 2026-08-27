@@ -359,19 +359,6 @@ func TestServer_StreamUnsupportedWriterAndHelpers(t *testing.T) {
 				assertErrorCode(t, recorder.Body, "config_error")
 			},
 		},
-		{
-			name: "provider status helper",
-			run: func(t *testing.T) {
-				t.Helper()
-
-				if got := providerStatus(""); got != "unreachable" {
-					t.Fatalf("providerStatus(\"\") = %q, want %q", got, "unreachable")
-				}
-				if got := providerStatus("https://api.example.com"); got != "reachable" {
-					t.Fatalf("providerStatus(non-empty) = %q, want %q", got, "reachable")
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {

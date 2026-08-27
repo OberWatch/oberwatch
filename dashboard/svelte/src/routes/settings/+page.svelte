@@ -2,7 +2,7 @@
   import { fetchJSON } from '$lib/api';
   import { DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
   import { loadPhase } from '$lib/loadState';
-  import type { HealthResponse, PricingResponse } from '$lib/types';
+  import type { HealthResponse, PricingResponse, ProviderAvailability, ProviderStatus } from '$lib/types';
   import type { Snippet } from 'svelte';
 
   type RowData = Record<string, string | number | boolean | null | undefined>;
@@ -11,7 +11,6 @@
     label: string;
     sortable?: boolean;
   };
-  type ProviderRow = RowData & { provider: string; status: string };
   type PricingRow = RowData & {
     model: string;
     provider: string;
@@ -34,7 +33,7 @@
   let version = $state('unknown');
   let uptimeSeconds = $state(0);
   let storageBackend = $state('unknown');
-  let providerRows = $state<ProviderRow[]>([]);
+  let providerRows = $state<ProviderStatus[]>([]);
   let pricingRows = $state<PricingRow[]>([]);
   let currentPassword = $state('');
   let newPassword = $state('');
@@ -66,6 +65,20 @@
     }).format(value);
   }
 
+  function providerBadgeStatus(status: ProviderAvailability): 'success' | 'warning' | 'error' {
+    if (status === 'operational') return 'success';
+    if (status === 'degraded') return 'warning';
+    return 'error';
+  }
+
+  function providerStatusLabel(row: ProviderStatus): string {
+    if (row.detail.startsWith('Checking')) return 'Checking';
+    if (row.status === 'operational') return 'Operational';
+    if (row.status === 'degraded') return 'Degraded';
+    if (row.status === 'outage') return 'Outage';
+    return 'Status unavailable';
+  }
+
   async function loadSettings(): Promise<void> {
     loading = true;
     errorMessage = null;
@@ -80,10 +93,7 @@
       uptimeSeconds = health.uptime_seconds;
       storageBackend = health.storage_backend ?? 'unknown';
 
-      providerRows = Object.entries(health.providers).map(([provider, status]) => ({
-        provider,
-        status
-      }));
+      providerRows = health.providers;
 
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : 'Failed to load system health.';
@@ -189,11 +199,17 @@
 
     <section class="rounded-lg border border-border-default bg-surface p-4">
       <h2 class="text-lg font-semibold text-text-primary">Provider Status</h2>
+      <p class="mt-1 text-sm text-text-secondary">
+        Public service availability only — not a test of API access or credentials.
+      </p>
       <div class="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
         {#each providerRows as provider}
-          <div class="flex items-center justify-between rounded-md border border-border-default bg-elevated px-3 py-2">
-            <span class="text-sm text-text-primary">{provider.provider}</span>
-            <StatusBadge status={provider.status === 'reachable' ? 'success' : 'error'} />
+          <div class="rounded-md border border-border-default bg-elevated px-3 py-2" title={provider.detail}>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm text-text-primary">{provider.label}</span>
+              <StatusBadge status={providerBadgeStatus(provider.status)} />
+            </div>
+            <p class="mt-1 text-xs text-text-secondary">{providerStatusLabel(provider)}</p>
           </div>
         {/each}
       </div>

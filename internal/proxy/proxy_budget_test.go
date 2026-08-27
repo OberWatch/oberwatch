@@ -47,7 +47,7 @@ func TestServer_BudgetRejectsBeforeUpstream(t *testing.T) {
 	server := newTestServer(t, proxyServer)
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-terra","messages":[{"role":"user","content":"hello"}]}`))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	cfg.Gate.DefaultBudget.LimitUSD = 10
 	cfg.Gate.DefaultBudget.ActionOnExceed = config.BudgetActionDowngrade
 	cfg.Gate.DowngradeThresholdPct = 50
-	cfg.Gate.DefaultDowngradeChain = []string{"gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"}
+	cfg.Gate.DefaultDowngradeChain = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 
 	manager := budget.NewManager(cfg.Gate, nil)
 	manager.RecordSpend("email-agent", 5.5)
@@ -124,7 +124,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	server := newTestServer(t, proxyServer)
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-4.1","stream":false,"messages":[{"role":"user","content":"hello"}]}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-sol","stream":false,"messages":[{"role":"user","content":"hello"}]}`))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestServer_BudgetDowngradeRewritesModelAndRecordsSpend(t *testing.T) {
 	_, _ = io.ReadAll(resp.Body)
 
 	gotBody := <-capturedBody
-	if !strings.Contains(gotBody, `"model":"gpt-4.1-mini"`) {
+	if !strings.Contains(gotBody, `"model":"gpt-5.6-terra"`) {
 		t.Fatalf("forwarded body = %s, want downgraded model", gotBody)
 	}
 
@@ -181,7 +181,7 @@ func TestServer_BudgetStreamingAccumulatesUsage(t *testing.T) {
 	server := newTestServer(t, proxyServer)
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-terra","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
@@ -375,7 +375,7 @@ func TestServer_KilledAgentOnlyBlocksProxyRoutes(t *testing.T) {
 		req, err := http.NewRequest(
 			http.MethodPost,
 			server.URL+"/v1/chat/completions",
-			strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`),
+			strings.NewReader(`{"model":"gpt-5.6-terra","messages":[{"role":"user","content":"hello"}]}`),
 		)
 		if err != nil {
 			t.Fatalf("NewRequest() error = %v", err)

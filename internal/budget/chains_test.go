@@ -15,18 +15,18 @@ func TestBuiltinChainForModel(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "OpenAI gpt-4o selects OpenAI chain",
-			model: "gpt-4o",
+			name:  "OpenAI gpt-5.6-sol selects OpenAI chain",
+			model: "gpt-5.6-sol",
 			want:  builtinOpenAIChain,
 		},
 		{
-			name:  "OpenAI gpt-4.1-mini selects OpenAI chain",
-			model: "gpt-4.1-mini",
+			name:  "OpenAI gpt-5.6-luna selects OpenAI chain",
+			model: "gpt-5.6-luna",
 			want:  builtinOpenAIChain,
 		},
 		{
-			name:  "Anthropic claude-opus-4-6 selects Anthropic chain",
-			model: "claude-opus-4-6",
+			name:  "Anthropic claude-opus-5 selects Anthropic chain",
+			model: "claude-opus-5",
 			want:  builtinAnthropicChain,
 		},
 		{
@@ -35,13 +35,13 @@ func TestBuiltinChainForModel(t *testing.T) {
 			want:  builtinAnthropicChain,
 		},
 		{
-			name:  "Google gemini-2.5-pro selects Google chain",
-			model: "gemini-2.5-pro",
+			name:  "Google gemini-3.1-pro-preview selects Google chain",
+			model: "gemini-3.1-pro-preview",
 			want:  builtinGoogleChain,
 		},
 		{
-			name:  "Google gemini-2.5-flash selects Google chain",
-			model: "gemini-2.5-flash",
+			name:  "Google gemini-3.5-flash-lite selects Google chain",
+			model: "gemini-3.5-flash-lite",
 			want:  builtinGoogleChain,
 		},
 		{
@@ -56,12 +56,12 @@ func TestBuiltinChainForModel(t *testing.T) {
 		},
 		{
 			name:  "Mixed case OpenAI model matches",
-			model: "GPT-4o",
+			model: "GPT-5.6-Terra",
 			want:  builtinOpenAIChain,
 		},
 		{
 			name:  "Mixed case Anthropic model matches",
-			model: "Claude-Sonnet-4-6",
+			model: "Claude-Sonnet-5",
 			want:  builtinAnthropicChain,
 		},
 	}
@@ -88,20 +88,26 @@ func TestRewriteModelForDowngrade_BuiltinChain(t *testing.T) {
 		wantDowngrade bool
 	}{
 		{
-			name:          "OpenAI gpt-4o downgrades via builtin chain",
-			model:         "gpt-4o",
-			wantNext:      "gpt-4.1",
+			name:          "OpenAI gpt-5.6-sol downgrades via builtin chain",
+			model:         "gpt-5.6-sol",
+			wantNext:      "gpt-5.6-terra",
 			wantDowngrade: true,
 		},
 		{
-			name:          "OpenAI gpt-4.1-mini is last in chain, no downgrade",
-			model:         "gpt-4.1-mini",
+			name:          "OpenAI gpt-5.6-luna is last in chain, no downgrade",
+			model:         "gpt-5.6-luna",
 			wantDowngrade: false,
 		},
 		{
-			name:          "Anthropic claude-opus-4-6 downgrades via builtin chain",
-			model:         "claude-opus-4-6",
-			wantNext:      "claude-sonnet-4-6",
+			name:          "Anthropic claude-fable-5 downgrades via builtin chain",
+			model:         "claude-fable-5",
+			wantNext:      "claude-opus-5",
+			wantDowngrade: true,
+		},
+		{
+			name:          "Anthropic claude-opus-5 downgrades via builtin chain",
+			model:         "claude-opus-5",
+			wantNext:      "claude-sonnet-5",
 			wantDowngrade: true,
 		},
 		{
@@ -110,14 +116,8 @@ func TestRewriteModelForDowngrade_BuiltinChain(t *testing.T) {
 			wantDowngrade: false,
 		},
 		{
-			name:          "Google gemini-2.5-pro downgrades via builtin chain",
-			model:         "gemini-2.5-pro",
-			wantNext:      "gemini-2.5-flash",
-			wantDowngrade: true,
-		},
-		{
-			name:          "Google gemini-2.5-flash is last in chain, no downgrade",
-			model:         "gemini-2.5-flash",
+			name:          "Google gemini-3.5-flash-lite is last in chain, no downgrade",
+			model:         "gemini-3.5-flash-lite",
 			wantDowngrade: false,
 		},
 		{
