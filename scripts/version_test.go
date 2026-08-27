@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -227,5 +228,44 @@ func TestEmbeddedDashboardMatchesChangelog(t *testing.T) {
 	}
 	if found == 0 {
 		t.Fatal("embedded dashboard assets contain no product version literal")
+	}
+}
+
+// TestEmbeddedDashboardProviderStatusContract ensures the checked-in bundle
+// consumed by Go embeds the array-based provider API and its safety copy.
+func TestEmbeddedDashboardProviderStatusContract(t *testing.T) {
+	t.Parallel()
+
+	staticRoot := filepath.Join(repoRoot(t), "internal", "dashboard", "static")
+	var bundle strings.Builder
+	walkErr := filepath.WalkDir(staticRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".js" {
+			return nil
+		}
+		contents, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		bundle.Write(contents)
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk embedded dashboard assets: %v", walkErr)
+	}
+
+	contents := bundle.String()
+	for _, want := range []string{
+		"Public service availability only",
+		"t.providers",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Errorf("embedded dashboard bundle is missing %q", want)
+		}
+	}
+	if strings.Contains(contents, "Object.entries(e.providers)") {
+		t.Error("embedded dashboard bundle still expects the legacy provider object schema")
 	}
 }
