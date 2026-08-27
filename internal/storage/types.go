@@ -14,6 +14,8 @@ var (
 	ErrAgentNotFound = errors.New("agent not found")
 	// ErrAgentExists indicates a rename or insert collided with an existing agent name.
 	ErrAgentExists = errors.New("agent already exists")
+	// ErrTaskNotFound indicates no task budget exists for the requested task ID.
+	ErrTaskNotFound = errors.New("task not found")
 )
 
 // Store defines persistence operations used by proxy, budget, and dashboard APIs.
@@ -31,6 +33,25 @@ type Store interface {
 	GetSetting(context.Context, string) (string, bool, error)
 	SetSetting(context.Context, string, string) error
 	DeleteSetting(context.Context, string) error
+	UpsertTask(context.Context, TaskRecord) error
+	GetTask(context.Context, string) (TaskRecord, bool, error)
+	ListTasks(context.Context) ([]TaskRecord, error)
+}
+
+// TaskRecord is the persisted lifetime spend total for one task.
+//
+// Only settled spend is stored. In-flight reservations live in memory because
+// a request that is still running when the process stops never completes.
+//
+//nolint:govet // keep persisted task fields grouped by domain semantics.
+type TaskRecord struct {
+	TaskID       string
+	LastAgent    string
+	SpentUSD     float64
+	LimitUSD     float64
+	RequestCount int
+	FirstSeenAt  time.Time
+	LastSeenAt   time.Time
 }
 
 // CostRecord captures one persisted proxied request billing event.
@@ -57,6 +78,9 @@ type CostRecord struct {
 type CostQuery struct {
 	Agent string
 	Model string
+	// Task filters on the exact task_id value recorded from X-Oberwatch-Task.
+	// Rows without a task ID never match a non-empty Task filter.
+	Task string
 	// GroupBy selects the aggregation shape: "", "agent", "model", "hour", "day",
 	// "agent_hour", or legacy "none".
 	//

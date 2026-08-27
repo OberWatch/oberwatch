@@ -18,7 +18,7 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // SQLiteStore persists Oberwatch data in SQLite.
 //
@@ -184,6 +184,19 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			"CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);",
 			"CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen_at);",
 		},
+		4: {
+			`CREATE TABLE IF NOT EXISTS task_budgets (
+				task_id TEXT PRIMARY KEY,
+				last_agent TEXT NOT NULL DEFAULT '',
+				spent_usd REAL NOT NULL DEFAULT 0,
+				limit_usd REAL NOT NULL DEFAULT 0,
+				request_count INTEGER NOT NULL DEFAULT 0,
+				first_seen_at TEXT NOT NULL,
+				last_seen_at TEXT NOT NULL
+			);`,
+			"CREATE INDEX IF NOT EXISTS idx_task_budgets_last_seen ON task_budgets(last_seen_at);",
+			"CREATE INDEX IF NOT EXISTS idx_cost_task ON cost_records(task_id);",
+		},
 	}
 
 	for version := current + 1; version <= currentSchemaVersion; version++ {
@@ -254,6 +267,10 @@ func (s *SQLiteStore) QueryCosts(ctx context.Context, query CostQuery) ([]CostAg
 	if strings.TrimSpace(query.Model) != "" {
 		where = append(where, "model = ?")
 		args = append(args, strings.TrimSpace(query.Model))
+	}
+	if strings.TrimSpace(query.Task) != "" {
+		where = append(where, "task_id = ?")
+		args = append(args, strings.TrimSpace(query.Task))
 	}
 	if !query.From.IsZero() {
 		where = append(where, normalizedCreatedAt+" >= ?")
@@ -860,6 +877,114 @@ func (s *SQLiteStore) DeleteSetting(ctx context.Context, key string) error {
 		return fmt.Errorf("delete setting %q: %w", key, err)
 	}
 	return nil
+}
+
+// UpsertTask writes the settled lifetime spend total for one task.
+func (s *SQLiteStore) UpsertTask(ctx context.Context, record TaskRecord) error {
+	record.TaskID = strings.TrimSpace(record.TaskID)
+	if record.TaskID == "" {
+		return fmt.Errorf("task id must not be empty")
+	}
+
+	now := time.Now().UTC()
+	if record.FirstSeenAt.IsZero() {
+		record.FirstSeenAt = now
+	}
+	if record.LastSeenAt.IsZero() {
+		record.LastSeenAt = now
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_budgets (
+			task_id, last_agent, spent_usd, limit_usd, request_count, first_seen_at, last_seen_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id) DO UPDATE SET
+			last_agent = excluded.last_agent,
+			spent_usd = excluded.spent_usd,
+			limit_usd = excluded.limit_usd,
+			request_count = excluded.request_count,
+			first_seen_at = COALESCE(task_budgets.first_seen_at, excluded.first_seen_at),
+			last_seen_at = excluded.last_seen_at
+	`,
+		record.TaskID,
+		strings.TrimSpace(record.LastAgent),
+		record.SpentUSD,
+		record.LimitUSD,
+		record.RequestCount,
+		record.FirstSeenAt.UTC().Format(time.RFC3339Nano),
+		record.LastSeenAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert task %q: %w", record.TaskID, err)
+	}
+	return nil
+}
+
+// GetTask returns one persisted task by exact ID.
+func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (TaskRecord, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT task_id, last_agent, spent_usd, limit_usd, request_count, first_seen_at, last_seen_at
+		FROM task_budgets
+		WHERE task_id = ?
+	`, strings.TrimSpace(taskID))
+
+	record, found, err := scanTaskRecord(row.Scan)
+	if err != nil {
+		return TaskRecord{}, false, fmt.Errorf("query task %q: %w", taskID, err)
+	}
+	return record, found, nil
+}
+
+// ListTasks returns all persisted tasks ordered by ID.
+func (s *SQLiteStore) ListTasks(ctx context.Context) ([]TaskRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT task_id, last_agent, spent_usd, limit_usd, request_count, first_seen_at, last_seen_at
+		FROM task_budgets
+		ORDER BY task_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	records := make([]TaskRecord, 0)
+	for rows.Next() {
+		record, _, scanErr := scanTaskRecord(rows.Scan)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan task row: %w", scanErr)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task rows: %w", err)
+	}
+	return records, nil
+}
+
+func scanTaskRecord(scan scannerFunc) (TaskRecord, bool, error) {
+	var record TaskRecord
+	var firstSeenAt string
+	var lastSeenAt string
+	err := scan(
+		&record.TaskID,
+		&record.LastAgent,
+		&record.SpentUSD,
+		&record.LimitUSD,
+		&record.RequestCount,
+		&firstSeenAt,
+		&lastSeenAt,
+	)
+	if err == sql.ErrNoRows {
+		return TaskRecord{}, false, nil
+	}
+	if err != nil {
+		return TaskRecord{}, false, err
+	}
+	record.FirstSeenAt = parseOptionalTime(firstSeenAt)
+	record.LastSeenAt = parseOptionalTime(lastSeenAt)
+	return record, true, nil
 }
 
 // CleanupRetention deletes records older than configured retention.

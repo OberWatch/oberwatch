@@ -468,6 +468,18 @@ func (f failingStore) DeleteSetting(context.Context, string) error {
 	return nil
 }
 
+func (f failingStore) UpsertTask(context.Context, storage.TaskRecord) error {
+	return nil
+}
+
+func (f failingStore) GetTask(context.Context, string) (storage.TaskRecord, bool, error) {
+	return storage.TaskRecord{}, false, nil
+}
+
+func (f failingStore) ListTasks(context.Context) ([]storage.TaskRecord, error) {
+	return nil, nil
+}
+
 func assertErrorCode(t *testing.T, body io.Reader, wantCode string) {
 	t.Helper()
 

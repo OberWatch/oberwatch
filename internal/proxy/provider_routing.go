@@ -251,6 +251,7 @@ func serveAnthropicOpenAICompat(w http.ResponseWriter, r *http.Request, route re
 			usage := pricing.ExtractUsageFromResponse(string(config.ProviderAnthropic), body, hooks.Logger)
 			cost := hooks.Pricing.CalculateCost(meta.model, usage.InputTokens, usage.OutputTokens)
 			hooks.Budget.RecordSpend(meta.agent, cost)
+			meta.taskReservation.Settle(cost)
 			if hooks.CostSink != nil {
 				hooks.CostSink.Enqueue(storage.CostRecord{
 					Agent:         meta.agent,

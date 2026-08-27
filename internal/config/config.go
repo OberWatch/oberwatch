@@ -95,7 +95,12 @@ type GateConfig struct {
 	APIKeyMap             []APIKeyMapEntry     `toml:"api_key_map"`
 	Runaway               RunawayConfig        `toml:"runaway"`
 	DowngradeThresholdPct float64              `toml:"downgrade_threshold_pct"`
-	Enabled               bool                 `toml:"enabled"`
+	// TaskBudgetUSD caps the lifetime spend of one task, identified by the
+	// X-Oberwatch-Task request header. Task spend never resets with a budget
+	// period; it can only be reset through the management API. Zero disables
+	// task budget enforcement.
+	TaskBudgetUSD float64 `toml:"task_budget_usd"`
+	Enabled       bool    `toml:"enabled"`
 }
 
 // BudgetLimitConfig defines a budget limit and reset period.
@@ -118,6 +123,9 @@ type AgentBudgetConfig struct {
 	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
 	DowngradeChain []string     `toml:"downgrade_chain"`
 	LimitUSD       float64      `toml:"limit_usd"`
+	// TaskBudgetUSD, when greater than zero, is preferred over gate.task_budget_usd
+	// for tasks driven by this agent. Zero inherits the gate-level value.
+	TaskBudgetUSD float64 `toml:"task_budget_usd"`
 }
 
 // BudgetPeriod is a budget reset window.

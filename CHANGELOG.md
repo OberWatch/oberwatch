@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Per-task budgets: `gate.task_budget_usd` and per-agent `task_budget_usd` cap the lifetime spend of a task identified by `X-Oberwatch-Task`
+- Task cap checks include in-flight estimates and reject with a structured `task_budget_exceeded` 429 before the request reaches the provider
+- Task spend totals persisted in SQLite (schema v4) and restored on restart
+- `GET /tasks`, `GET /tasks/{task_id}`, and `POST /tasks/{task_id}/reset` management endpoints
+- `task` filter on `GET /costs` and `GET /costs/export`
+
 ## [0.1.2] - 2026-08-26
 
 ### Added

@@ -174,6 +174,10 @@ type BudgetManager struct {
 	globalLimitUSD float64
 	globalPeriod   config.BudgetPeriod
 	globalState    globalBudgetState
+
+	defaultTaskLimit float64
+	agentTaskLimit   map[string]float64
+	tasks            map[string]*taskState
 }
 
 // NewManager creates a budget manager from gate configuration.
@@ -319,6 +323,9 @@ func newManager(
 			periodStartsAt: now,
 			periodResetsAt: nextPeriodReset(now, globalPeriod),
 		},
+		defaultTaskLimit: gate.TaskBudgetUSD,
+		agentTaskLimit:   make(map[string]float64),
+		tasks:            make(map[string]*taskState),
 	}
 
 	for _, entry := range gate.Agents {
@@ -331,10 +338,16 @@ func newManager(
 		}
 		normalized := normalizeAgent(entry.Name)
 		manager.agentPolicy[normalized] = policy
+		if entry.TaskBudgetUSD > 0 {
+			manager.agentTaskLimit[normalized] = entry.TaskBudgetUSD
+		}
 	}
 
 	if persistent && store != nil {
 		if err := manager.loadPersistedAgents(context.Background()); err != nil {
+			return nil, err
+		}
+		if err := manager.loadPersistedTasks(context.Background()); err != nil {
 			return nil, err
 		}
 		manager.flushInterval = 30 * time.Second
@@ -1041,7 +1054,7 @@ func (m *BudgetManager) Flush(ctx context.Context) error {
 			return fmt.Errorf("flush agent %q: %w", record.Name, err)
 		}
 	}
-	return nil
+	return m.flushTasks(ctx)
 }
 
 // RenameAgent changes the runtime and persisted name for one tracked agent.

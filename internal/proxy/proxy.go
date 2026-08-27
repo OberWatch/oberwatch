@@ -29,14 +29,17 @@ const (
 type budgetContextKey struct{}
 
 type budgetRequestMeta struct {
-	agent         string
-	model         string
-	provider      string
-	traceID       string
-	taskID        string
-	originalModel string
-	streaming     bool
-	downgraded    bool
+	// taskReservation is the in-flight task budget hold; nil when the request
+	// carries no task ID. Settle or Release is idempotent.
+	taskReservation *budget.TaskReservation
+	agent           string
+	model           string
+	provider        string
+	traceID         string
+	taskID          string
+	originalModel   string
+	streaming       bool
+	downgraded      bool
 }
 
 // Hook is a middleware callback executed for each request.
@@ -285,20 +288,41 @@ func gateMiddleware(hooks Hooks) func(http.Handler) http.Handler {
 				default:
 				}
 
+				// The task cap is checked after the agent decision so the estimate
+				// reflects the model that will actually be sent upstream.
+				taskID := strings.TrimSpace(r.Header.Get("X-Oberwatch-Task"))
+				var taskReservation *budget.TaskReservation
+				if taskID != "" {
+					taskEstimate := estimatedCost
+					if model != originalModel {
+						taskEstimate = hooks.Pricing.CalculateCost(model, estimatedInputTokens, 0)
+					}
+					taskDecision, reservation := hooks.Budget.ReserveTask(agent, taskID, taskEstimate)
+					if !taskDecision.Allowed {
+						writeTaskBudgetError(w, taskDecision)
+						return
+					}
+					taskReservation = reservation
+					// Whatever happens downstream (upstream error, client
+					// disconnect, translated response), the hold must not leak.
+					defer taskReservation.Release()
+				}
+
 				r.Body = io.NopCloser(bytes.NewReader(requestBody))
 				r.ContentLength = int64(len(requestBody))
 				r.GetBody = func() (io.ReadCloser, error) {
 					return io.NopCloser(bytes.NewReader(requestBody)), nil
 				}
 				meta := budgetRequestMeta{
-					agent:         agent,
-					model:         model,
-					provider:      string(config.ProviderOpenAI),
-					traceID:       strings.TrimSpace(r.Header.Get("X-Oberwatch-Trace-ID")),
-					taskID:        strings.TrimSpace(r.Header.Get("X-Oberwatch-Task")),
-					originalModel: originalModel,
-					streaming:     streaming,
-					downgraded:    downgraded,
+					agent:           agent,
+					model:           model,
+					provider:        string(config.ProviderOpenAI),
+					traceID:         strings.TrimSpace(r.Header.Get("X-Oberwatch-Trace-ID")),
+					taskID:          taskID,
+					taskReservation: taskReservation,
+					originalModel:   originalModel,
+					streaming:       streaming,
+					downgraded:      downgraded,
 				}
 				if route, ok := resolvedRouteFromContext(r.Context()); ok {
 					meta.provider = string(route.provider)
@@ -425,9 +449,11 @@ func (b *budgetTrackingBody) Close() error {
 func (b *budgetTrackingBody) finalize() {
 	b.once.Do(func() {
 		if b.statusCode < http.StatusOK || b.statusCode >= http.StatusBadRequest {
+			b.meta.taskReservation.Release()
 			return
 		}
 		if b.meta.model == "" {
+			b.meta.taskReservation.Release()
 			return
 		}
 
@@ -440,6 +466,7 @@ func (b *budgetTrackingBody) finalize() {
 
 		cost := b.pricing.CalculateCost(b.meta.model, usage.InputTokens, usage.OutputTokens)
 		b.manager.RecordSpend(b.meta.agent, cost)
+		b.meta.taskReservation.Settle(cost)
 		if b.sink != nil {
 			b.sink.Enqueue(storage.CostRecord{
 				Agent:         b.meta.agent,
@@ -501,6 +528,40 @@ func writeConfigError(w http.ResponseWriter, message string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
+	if _, err := w.Write(payload); err != nil {
+		return
+	}
+}
+
+func writeTaskBudgetError(w http.ResponseWriter, decision budget.TaskDecision) {
+	code := decision.Code
+	if code == "" {
+		code = budget.TaskBudgetExceededCode
+	}
+	message := decision.Message
+	if message == "" {
+		message = fmt.Sprintf("Task '%s' would exceed its budget of $%.2f", decision.TaskID, decision.LimitUSD)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"code":                      code,
+			"message":                   message,
+			"agent":                     decision.Agent,
+			"task_id":                   decision.TaskID,
+			"task_budget_limit_usd":     decision.LimitUSD,
+			"task_budget_spent_usd":     decision.SpentUSD,
+			"task_budget_reserved_usd":  decision.ReservedUSD,
+			"task_budget_projected_usd": decision.ProjectedUSD,
+		},
+	})
+	if err != nil {
+		http.Error(w, message, http.StatusTooManyRequests)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
 	if _, err := w.Write(payload); err != nil {
 		return
 	}
