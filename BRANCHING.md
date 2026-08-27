@@ -41,6 +41,8 @@ Merges to `main` publish the `beta` container image. Merges to `staging` publish
 
 Tagged releases are created from `main` only.
 
+- Bump every version surface and the CHANGELOG together; `go test ./scripts/` checks they agree.
+- Run `make smoke` (or `scripts/release-smoke.sh <binary>` against the built artifact) and keep the three transcripts as release evidence.
 - Create a tag like `v0.1.0` on `main`.
 - Pushing the tag runs the release workflow.
 - The release workflow publishes binaries plus stable container images to GHCR and Docker Hub.

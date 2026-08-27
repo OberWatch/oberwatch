@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: tools build run dev test test-race test-cli lint clean fmt vet dashboard
+.PHONY: tools build run dev test test-race test-cli smoke lint clean fmt vet dashboard
 
 BINARY_NAME := oberwatch
 BUILD_DIR := bin
@@ -34,6 +34,11 @@ test-race:
 # Exercise `oberwatch init` and `oberwatch validate` against a built binary
 test-cli:
 	./scripts/test-cli-config.sh
+
+# Run the release smoke contracts (init/validate, runaway kill/enable, task budgets)
+# against a release-style build, or against a binary: make smoke BIN=./oberwatch
+smoke:
+	./scripts/release-smoke.sh $(BIN)
 
 # Run linter
 lint: tools
