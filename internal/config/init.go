@@ -25,8 +25,8 @@ port = 8080
 # Env: OBERWATCH_SERVER__HOST
 host = "0.0.0.0"
 
-# Admin token for the management API and dashboard.
-# REQUIRED in production. If not set, management API is disabled.
+# Legacy admin token. Management API and dashboard auth is session-based:
+# the first visit to the dashboard creates the admin account. Leave empty.
 # Env: OBERWATCH_SERVER__ADMIN_TOKEN
 admin_token = ""
 
@@ -282,10 +282,25 @@ input_per_million = 0.30
 output_per_million = 2.50
 `
 
+// DefaultInitOutput is where `oberwatch init` writes when --output is omitted.
+const DefaultInitOutput = "./oberwatch.toml"
+
 // GenerateStarter writes StarterTOML to the requested path without overwriting an existing file.
 func GenerateStarter(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("refusing to overwrite existing file %q", path)
+	return WriteStarter(path, false)
+}
+
+// WriteStarter writes StarterTOML to path, creating parent directories as
+// needed. An existing file is only replaced when force is true; otherwise the
+// file is left untouched and an error is returned.
+func WriteStarter(path string, force bool) error {
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("output path %q is a directory, want a file path", path)
+		}
+		if !force {
+			return fmt.Errorf("refusing to overwrite existing file %q (use --force to replace it)", path)
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %q: %w", path, err)
 	}
@@ -298,4 +313,14 @@ func GenerateStarter(path string) error {
 	}
 
 	return nil
+}
+
+// InitSuccessMessage is the stdout text printed after `oberwatch init` writes path.
+func InitSuccessMessage(path string) string {
+	return fmt.Sprintf("wrote starter config to %s\nnext: oberwatch serve --config %s\n", path, path)
+}
+
+// ValidSuccessMessage is the exact stdout text printed when `oberwatch validate` succeeds.
+func ValidSuccessMessage(path string) string {
+	return fmt.Sprintf("config %s is valid\n", path)
 }

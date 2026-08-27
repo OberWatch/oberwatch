@@ -642,94 +642,192 @@ func TestDisplayVersion_DefaultsWhenVersionEmpty(t *testing.T) {
 }
 
 func TestValidateAndInitCommands(t *testing.T) {
+	// Each case gets a fresh temp dir; {dir} in args and expectations is
+	// replaced with that directory so paths can be asserted exactly.
 	//nolint:govet // Keep table fields grouped for clearer command test setup.
 	tests := []struct {
-		name       string
-		args       []string
-		wantErrSub string
-		wantOutSub string
-		checkFile  string
+		name        string
+		args        []string
+		precreate   map[string]string
+		wantErrSubs []string
+		wantStdout  string
+		wantStderr  string
+		wantFile    string
+		wantContent string
 	}{
 		{
-			name:       "validate succeeds with valid config",
-			args:       []string{"validate"},
-			wantOutSub: "is valid",
+			name:       "validate succeeds with valid config via root flag",
+			args:       []string{"--config", "{dir}/oberwatch.toml", "validate"},
+			precreate:  map[string]string{"oberwatch.toml": config.StarterTOML},
+			wantStdout: "config {dir}/oberwatch.toml is valid\n",
 		},
 		{
-			name:       "validate fails with missing config",
-			args:       []string{"validate"},
-			wantErrSub: "parse config",
+			name:       "validate succeeds with config flag after subcommand",
+			args:       []string{"validate", "--config", "{dir}/custom.toml"},
+			precreate:  map[string]string{"custom.toml": config.StarterTOML},
+			wantStdout: "config {dir}/custom.toml is valid\n",
 		},
 		{
-			name:       "init writes starter file",
-			args:       []string{"init"},
-			wantOutSub: "wrote starter config",
-			checkFile:  "exists",
+			name:        "validate fails with missing config",
+			args:        []string{"--config", "{dir}/missing.toml", "validate"},
+			wantErrSubs: []string{"not found", "missing.toml", "--config flag"},
 		},
 		{
-			name:       "init fails when file exists without force",
-			args:       []string{"init"},
-			wantErrSub: "refusing to overwrite existing file",
-			checkFile:  "precreate",
+			name:        "validate fails with malformed config",
+			args:        []string{"validate", "--config", "{dir}/bad.toml"},
+			precreate:   map[string]string{"bad.toml": "[server]\nport = \n"},
+			wantErrSubs: []string{"parse config", "bad.toml", "line 2"},
 		},
 		{
-			name:       "init force overwrites existing file",
-			args:       []string{"init", "--force"},
-			wantOutSub: "wrote starter config",
-			checkFile:  "precreate",
+			name:        "validate fails with semantically invalid config",
+			args:        []string{"validate", "--config", "{dir}/bad.toml"},
+			precreate:   map[string]string{"bad.toml": "[server]\nport = 0\nhost = \"\"\n"},
+			wantErrSubs: []string{"validate config", "bad.toml", "server.port", "server.host"},
+		},
+		{
+			name:       "validate warns about legacy admin token on stderr",
+			args:       []string{"validate", "--config", "{dir}/legacy.toml"},
+			precreate:  map[string]string{"legacy.toml": "[server]\nadmin_token = \"legacy\"\n"},
+			wantStdout: "config {dir}/legacy.toml is valid\n",
+			wantStderr: "warning: server.admin_token is set but not used",
+		},
+		{
+			name:        "init writes starter file to nested output path",
+			args:        []string{"init", "--output", "{dir}/nested/oberwatch.toml"},
+			wantStdout:  "wrote starter config to {dir}/nested/oberwatch.toml\nnext: oberwatch serve --config {dir}/nested/oberwatch.toml\n",
+			wantFile:    "nested/oberwatch.toml",
+			wantContent: config.StarterTOML,
+		},
+		{
+			name:        "init fails when file exists without force",
+			args:        []string{"init", "--output", "{dir}/oberwatch.toml"},
+			precreate:   map[string]string{"oberwatch.toml": "old"},
+			wantErrSubs: []string{"refusing to overwrite existing file", "--force"},
+			wantFile:    "oberwatch.toml",
+			wantContent: "old",
+		},
+		{
+			name:        "init force overwrites existing file",
+			args:        []string{"init", "--force", "--output", "{dir}/oberwatch.toml"},
+			precreate:   map[string]string{"oberwatch.toml": "old"},
+			wantStdout:  "wrote starter config to {dir}/oberwatch.toml\nnext: oberwatch serve --config {dir}/oberwatch.toml\n",
+			wantFile:    "oberwatch.toml",
+			wantContent: config.StarterTOML,
 		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			cfgPath := writeValidConfig(t)
-			missingPath := filepath.Join(t.TempDir(), "missing.toml")
-			outputPath := filepath.Join(t.TempDir(), "nested", "oberwatch.toml")
+			dir := t.TempDir()
+			expand := func(s string) string { return strings.ReplaceAll(s, "{dir}", dir) }
 
-			if tt.checkFile == "precreate" {
-				if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			for name, content := range tt.precreate {
+				path := filepath.Join(dir, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 					t.Fatalf("MkdirAll() error = %v", err)
 				}
-				if err := os.WriteFile(outputPath, []byte("old"), 0o644); err != nil {
-					t.Fatalf("WriteFile(precreate) error = %v", err)
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatalf("WriteFile(%s) error = %v", name, err)
 				}
+			}
+
+			args := make([]string, 0, len(tt.args))
+			for _, arg := range tt.args {
+				args = append(args, expand(arg))
 			}
 
 			root := newRootCmd()
-			var stdout bytes.Buffer
+			var stdout, stderr bytes.Buffer
 			root.SetOut(&stdout)
-			root.SetErr(&bytes.Buffer{})
-
-			switch tt.name {
-			case "validate succeeds with valid config":
-				root.SetArgs([]string{"--config", cfgPath, "validate"})
-			case "validate fails with missing config":
-				root.SetArgs([]string{"--config", missingPath, "validate"})
-			default:
-				root.SetArgs(append([]string{"init", "--output", outputPath}, tt.args[1:]...))
-			}
+			root.SetErr(&stderr)
+			root.SetArgs(args)
 
 			err := root.Execute()
-			if tt.wantErrSub == "" {
+			if len(tt.wantErrSubs) > 0 {
+				if err == nil {
+					t.Fatalf("Execute() error = nil, want error containing %v", tt.wantErrSubs)
+				}
+				for _, sub := range tt.wantErrSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("Execute() error = %q, want substring %q", err.Error(), sub)
+					}
+				}
+				if stdout.Len() != 0 {
+					t.Fatalf("stdout = %q, want empty on failure", stdout.String())
+				}
+			} else {
 				if err != nil {
 					t.Fatalf("Execute() error = %v", err)
 				}
-				if tt.wantOutSub != "" && !strings.Contains(stdout.String(), tt.wantOutSub) {
-					t.Fatalf("stdout = %q, want substring %q", stdout.String(), tt.wantOutSub)
+				if got, want := stdout.String(), expand(tt.wantStdout); got != want {
+					t.Fatalf("stdout = %q, want %q", got, want)
 				}
-				if tt.checkFile == "exists" || tt.checkFile == "precreate" {
-					if _, statErr := os.Stat(outputPath); statErr != nil {
-						t.Fatalf("Stat(%q) error = %v", outputPath, statErr)
-					}
-				}
-				return
+			}
+			if tt.wantStderr != "" && !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Fatalf("stderr = %q, want substring %q", stderr.String(), tt.wantStderr)
+			}
+			if tt.wantStderr == "" && len(tt.wantErrSubs) == 0 && stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 
-			if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
-				t.Fatalf("Execute() error = %v, want substring %q", err, tt.wantErrSub)
+			if tt.wantFile != "" {
+				data, readErr := os.ReadFile(filepath.Join(dir, tt.wantFile))
+				if readErr != nil {
+					t.Fatalf("ReadFile(%s) error = %v", tt.wantFile, readErr)
+				}
+				if string(data) != tt.wantContent {
+					t.Fatalf("%s content mismatch: got %d bytes, want %d bytes", tt.wantFile, len(data), len(tt.wantContent))
+				}
 			}
 		})
+	}
+}
+
+func TestInitDefaultOutputRoundTripsThroughValidate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	initRoot := newRootCmd()
+	var initOut bytes.Buffer
+	initRoot.SetOut(&initOut)
+	initRoot.SetErr(&bytes.Buffer{})
+	initRoot.SetArgs([]string{"init"})
+	if err := initRoot.Execute(); err != nil {
+		t.Fatalf("init Execute() error = %v", err)
+	}
+	if got, want := initOut.String(), config.InitSuccessMessage(config.DefaultInitOutput); got != want {
+		t.Fatalf("init stdout = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "oberwatch.toml")); err != nil {
+		t.Fatalf("init did not write ./oberwatch.toml: %v", err)
+	}
+
+	validateRoot := newRootCmd()
+	var validateOut, validateErr bytes.Buffer
+	validateRoot.SetOut(&validateOut)
+	validateRoot.SetErr(&validateErr)
+	validateRoot.SetArgs([]string{"validate"})
+	if err := validateRoot.Execute(); err != nil {
+		t.Fatalf("validate Execute() error = %v", err)
+	}
+	if got, want := validateOut.String(), "config ./oberwatch.toml is valid\n"; got != want {
+		t.Fatalf("validate stdout = %q, want %q", got, want)
+	}
+	if validateErr.Len() != 0 {
+		t.Fatalf("validate stderr = %q, want no warnings for the starter config", validateErr.String())
 	}
 }
 
@@ -749,54 +847,6 @@ func TestRunAndWriteStarterConfig(t *testing.T) {
 
 				if err := run(); err != nil {
 					t.Fatalf("run() error = %v", err)
-				}
-			},
-		},
-		{
-			name: "writeStarterConfig force creates nested path",
-			runTest: func(t *testing.T) {
-				t.Helper()
-				path := filepath.Join(t.TempDir(), "deep", "oberwatch.toml")
-				if err := writeStarterConfig(path, true); err != nil {
-					t.Fatalf("writeStarterConfig(force=true) error = %v", err)
-				}
-				content, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatalf("ReadFile() error = %v", err)
-				}
-				if !strings.Contains(string(content), "[server]") {
-					t.Fatalf("starter config missing [server] section: %q", string(content))
-				}
-			},
-		},
-		{
-			name: "writeStarterConfig without force errors on existing file",
-			runTest: func(t *testing.T) {
-				t.Helper()
-				path := filepath.Join(t.TempDir(), "oberwatch.toml")
-				if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
-					t.Fatalf("WriteFile() error = %v", err)
-				}
-				err := writeStarterConfig(path, false)
-				if err == nil {
-					t.Fatal("writeStarterConfig(force=false) error = nil, want non-nil")
-				}
-			},
-		},
-		{
-			name: "writeStarterConfig without force creates new file",
-			runTest: func(t *testing.T) {
-				t.Helper()
-				path := filepath.Join(t.TempDir(), "oberwatch.toml")
-				if err := writeStarterConfig(path, false); err != nil {
-					t.Fatalf("writeStarterConfig(force=false) error = %v", err)
-				}
-				content, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatalf("ReadFile() error = %v", err)
-				}
-				if !strings.Contains(string(content), "[server]") {
-					t.Fatalf("starter config missing [server] section: %q", string(content))
 				}
 			},
 		},

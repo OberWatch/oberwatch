@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -317,25 +316,12 @@ func defaultPricing() []PricingEntry {
 
 // Load loads, overrides, and validates a configuration file.
 func Load(path string) (Config, error) {
-	resolvedPath, err := resolveConfigPath(path)
+	resolvedPath, _, err := resolveConfigPathWithSource(path)
 	if err != nil {
 		return Config{}, err
 	}
 
-	cfg := DefaultConfig()
-	if _, err := toml.DecodeFile(resolvedPath, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config %q: %w", resolvedPath, err)
-	}
-
-	if err := applyEnvOverrides(&cfg, os.Environ()); err != nil {
-		return Config{}, err
-	}
-
-	if err := Validate(cfg); err != nil {
-		return Config{}, fmt.Errorf("validate config %q: %w", resolvedPath, err)
-	}
-
-	return cfg, nil
+	return loadResolved(resolvedPath)
 }
 
 // LoadRuntime loads a runtime configuration. If no explicit path is provided and
@@ -369,28 +355,9 @@ func LoadRuntime(path string) (Config, string, error) {
 	return cfg, "(defaults/env only)", nil
 }
 
-func resolveConfigPath(path string) (string, error) {
-	if path != "" {
-		return path, nil
-	}
-
-	found := FindConfigFile()
-	if found == "" {
-		return "", fmt.Errorf("no config file found; checked --config, ./oberwatch.toml, $HOME/.config/oberwatch/oberwatch.toml, and /etc/oberwatch/oberwatch.toml")
-	}
-
-	return found, nil
-}
-
 // FindConfigFile returns the first config file found in the documented search order.
 func FindConfigFile() string {
-	candidates := []string{"./oberwatch.toml"}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates = append(candidates, filepath.Join(home, ".config", "oberwatch", "oberwatch.toml"))
-	}
-	candidates = append(candidates, "/etc/oberwatch/oberwatch.toml")
-
-	for _, candidate := range candidates {
+	for _, candidate := range configSearchCandidates() {
 		info, err := os.Stat(candidate)
 		if err == nil && !info.IsDir() {
 			return candidate

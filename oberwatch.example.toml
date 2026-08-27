@@ -17,10 +17,10 @@ port = 8080
 # Env: OBERWATCH_SERVER__HOST
 host = "0.0.0.0"
 
-# Bearer token required for management API and dashboard endpoints.
-# Keep this secret in production.
+# Legacy admin token. Management API and dashboard auth is session-based:
+# the first visit to the dashboard creates the admin account. Leave empty.
 # Env: OBERWATCH_SERVER__ADMIN_TOKEN
-admin_token = "change-me-admin-token"
+admin_token = ""
 
 # Enable or disable the embedded dashboard.
 # Env: OBERWATCH_SERVER__DASHBOARD

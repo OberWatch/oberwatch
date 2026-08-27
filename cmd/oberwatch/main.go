@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -447,12 +446,7 @@ func newValidateCmd(rootOpts *rootOptions) *cobra.Command {
 			if printed || err != nil {
 				return err
 			}
-			_, err = config.Load(rootOpts.configPath)
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "config %s is valid\n", rootOpts.configPath)
-			return err
+			return config.RunValidate(cmd.OutOrStdout(), cmd.ErrOrStderr(), rootOpts.configPath)
 		},
 	}
 }
@@ -464,7 +458,7 @@ type initOptions struct {
 
 func newInitCmd(rootOpts *rootOptions) *cobra.Command {
 	opts := &initOptions{
-		output: "./oberwatch.toml",
+		output: config.DefaultInitOutput,
 	}
 
 	cmd := &cobra.Command{
@@ -476,34 +470,14 @@ func newInitCmd(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			if writeErr := writeStarterConfig(opts.output, opts.force); writeErr != nil {
-				return writeErr
-			}
-
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wrote starter config to %s\n", opts.output)
-			return err
+			return config.RunInit(cmd.OutOrStdout(), opts.output, opts.force)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.output, "output", "o", "./oberwatch.toml", "Output path")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", config.DefaultInitOutput, "Output path")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Overwrite existing config file")
 
 	return cmd
-}
-
-func writeStarterConfig(path string, force bool) error {
-	if !force {
-		return config.GenerateStarter(path)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config directory for %q: %w", path, err)
-	}
-	if err := os.WriteFile(path, []byte(config.StarterTOML), 0o644); err != nil {
-		return fmt.Errorf("write starter config %q: %w", path, err)
-	}
-
-	return nil
 }
 
 func newVersionCmd() *cobra.Command {
