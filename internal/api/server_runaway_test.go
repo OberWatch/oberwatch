@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -117,16 +118,28 @@ func newRunawayStack(t *testing.T, maxRequests, windowSeconds int) *runawayStack
 	}
 }
 
-func (s *runawayStack) completion(t *testing.T, agent string) (int, string) {
-	t.Helper()
-
+// tryCompletion posts one chat completion and returns the transport error
+// instead of failing the test, so spawned goroutines can call it.
+func (s *runawayStack) tryCompletion(agent string) (int, string, error) {
 	req, err := http.NewRequest(http.MethodPost, s.proxyURL+"/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
-		t.Fatalf("NewRequest() error = %v", err)
+		return 0, "", fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Oberwatch-Agent", agent)
-	return s.do(t, req)
+	return s.tryDo(req)
+}
+
+// completion posts one chat completion for the agent. Call it only from the
+// goroutine running the test.
+func (s *runawayStack) completion(t *testing.T, agent string) (int, string) {
+	t.Helper()
+
+	status, body, err := s.tryCompletion(agent)
+	if err != nil {
+		t.Fatalf("completion(%q) error = %v", agent, err)
+	}
+	return status, body
 }
 
 func (s *runawayStack) management(t *testing.T, method, path string) (int, string) {
@@ -141,19 +154,27 @@ func (s *runawayStack) management(t *testing.T, method, path string) (int, strin
 	return s.do(t, req)
 }
 
-func (s *runawayStack) do(t *testing.T, req *http.Request) (int, string) {
-	t.Helper()
-
+func (s *runawayStack) tryDo(req *http.Request) (int, string, error) {
 	resp, err := s.client.Do(req)
 	if err != nil {
-		t.Fatalf("Do() error = %v", err)
+		return 0, "", fmt.Errorf("do request: %w", err)
 	}
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if err != nil {
-		t.Fatalf("ReadAll() error = %v", err)
+		return 0, "", fmt.Errorf("read body: %w", err)
 	}
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, string(body), nil
+}
+
+func (s *runawayStack) do(t *testing.T, req *http.Request) (int, string) {
+	t.Helper()
+
+	status, body, err := s.tryDo(req)
+	if err != nil {
+		t.Fatalf("%s %s error = %v", req.Method, req.URL.Path, err)
+	}
+	return status, body
 }
 
 func (s *runawayStack) alertCounts(t *testing.T, agent string) map[alert.Type]int {
@@ -326,7 +347,11 @@ func TestServer_RunawayConcurrentAgentsThroughProxyAndAPI(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						<-start
-						status, body := stack.completion(t, agent)
+						status, body, err := stack.tryCompletion(agent)
+						if err != nil {
+							t.Errorf("%s request failed: %v", agent, err)
+							return
+						}
 						mu.Lock()
 						defer mu.Unlock()
 						switch {

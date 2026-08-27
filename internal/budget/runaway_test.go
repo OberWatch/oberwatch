@@ -94,6 +94,9 @@ func TestRunawayDetection_SlidingWindow(t *testing.T) {
 			wantKilled:     map[string]bool{"agent-a": false},
 			wantAlertPairs: map[string]int{"agent-a": 0},
 		},
+		// Config validation rejects max_requests < 1 and window_seconds < 1, so
+		// the next two cases cover the detector's own guard clause rather than a
+		// config a user could load.
 		{
 			name:           "enabled detector with zero max_requests is inactive",
 			cfg:            runawayGateConfig(true, 0, window),
@@ -182,6 +185,21 @@ func TestRunawayDetection_SlidingWindow(t *testing.T) {
 				{agent: "agent-a", advance: (window + 1) * time.Second, want: ActionKill},
 				{agent: "agent-a", enable: true, want: ActionAllow},
 				{agent: "agent-a", want: ActionAllow},
+				{agent: "agent-a", want: ActionKill},
+			},
+			wantKilled:     map[string]bool{"agent-a": true},
+			wantAlertPairs: map[string]int{"agent-a": 2},
+		},
+		{
+			name: "manual enable inside the window re-kills on the next request",
+			cfg:  runawayGateConfig(true, 2, window),
+			steps: []runawayStep{
+				{agent: "agent-a", want: ActionAllow},
+				{agent: "agent-a", want: ActionAllow},
+				{agent: "agent-a", want: ActionKill},
+				// Enable clears the kill but not the request window, so the next
+				// request is still over the limit and alerts a second time.
+				{agent: "agent-a", enable: true, want: ActionKill},
 				{agent: "agent-a", want: ActionKill},
 			},
 			wantKilled:     map[string]bool{"agent-a": true},

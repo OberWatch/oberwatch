@@ -126,27 +126,38 @@ func (h *runawayHarness) hits() int32 {
 	return atomic.LoadInt32(h.upstreamHits)
 }
 
-// send posts one chat completion for the agent and returns status and body.
-func (h *runawayHarness) send(t *testing.T, agent string) (int, []byte) {
-	t.Helper()
-
+// trySend posts one chat completion for the agent and returns the transport
+// error instead of failing the test, so spawned goroutines can call it.
+func (h *runawayHarness) trySend(agent string) (int, []byte, error) {
 	req, err := http.NewRequest(http.MethodPost, h.proxyURL+"/v1/chat/completions", strings.NewReader(runawayRequestBody))
 	if err != nil {
-		t.Fatalf("NewRequest() error = %v", err)
+		return 0, nil, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Oberwatch-Agent", agent)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		t.Fatalf("Do() error = %v", err)
+		return 0, nil, fmt.Errorf("do request: %w", err)
 	}
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if err != nil {
-		t.Fatalf("ReadAll() error = %v", err)
+		return 0, nil, fmt.Errorf("read body: %w", err)
 	}
-	return resp.StatusCode, body
+	return resp.StatusCode, body, nil
+}
+
+// send posts one chat completion for the agent and returns status and body.
+// Call it only from the goroutine running the test.
+func (h *runawayHarness) send(t *testing.T, agent string) (int, []byte) {
+	t.Helper()
+
+	status, body, err := h.trySend(agent)
+	if err != nil {
+		t.Fatalf("send(%q) error = %v", agent, err)
+	}
+	return status, body
 }
 
 func assertAgentKilledBody(t *testing.T, body []byte, agent string) {
@@ -338,7 +349,11 @@ func TestServer_RunawayConcurrentAgentsRace(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						<-start
-						status, body := h.send(t, agent)
+						status, body, err := h.trySend(agent)
+						if err != nil {
+							t.Errorf("%s request failed: %v", agent, err)
+							return
+						}
 						mu.Lock()
 						defer mu.Unlock()
 						switch status {

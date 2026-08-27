@@ -33,8 +33,13 @@ API="${BASE}/_oberwatch/api/v1"
 MOCK="http://127.0.0.1:${MOCK_PORT}"
 
 if [ -z "${RUNAWAY_TEST_CHILD:-}" ]; then
-  # Re-run under timeout so a hung server can never leave the script running.
-  RUNAWAY_TEST_CHILD=1 exec timeout --kill-after=5 "$TIMEOUT_SECONDS" "$0" "$@"
+  if command -v timeout >/dev/null 2>&1; then
+    # Re-run under timeout so a hung server can never leave the script running.
+    RUNAWAY_TEST_CHILD=1 exec timeout --kill-after=5 "$TIMEOUT_SECONDS" "$0" "$@"
+  fi
+  # Without timeout(1) the run is still bounded: every curl has --max-time and
+  # every wait loop has a fixed iteration count.
+  echo "note: timeout(1) not found, running without the ${TIMEOUT_SECONDS}s hard cap" >&2
 fi
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oberwatch-runaway.XXXXXX")"
@@ -251,8 +256,9 @@ send_request() {
 
 count_in() {
   # count_in <text> <needle>: number of occurrences of needle in text.
+  # grep exits 1 on no match, so keep the pipeline status zero under pipefail.
   local n
-  n=$(printf '%s' "$1" | grep -o -- "$2" | wc -l | tr -d ' ')
+  n=$(printf '%s' "$1" | grep -o -- "$2" | wc -l | tr -d ' ' || true)
   echo "${n:-0}"
 }
 
@@ -265,7 +271,7 @@ mock_alert_count() {
   local state
   state=$(curl -sf --max-time 5 "${MOCK}/__state")
   local n
-  n=$(printf '%s' "$state" | grep -o "\"$1/$2\":[0-9]*" | cut -d: -f2)
+  n=$(printf '%s' "$state" | grep -o "\"$1/$2\":[0-9]*" | cut -d: -f2 || true)
   echo "${n:-0}"
 }
 
