@@ -605,6 +605,8 @@ func TestVerifyBinaryVersion(t *testing.T) {
 	}{
 		{name: "reports the requested version", script: "#!/bin/sh\necho \"oberwatch v0.1.4\"\n", target: "v0.1.4"},
 		{name: "reports another version", script: "#!/bin/sh\necho \"oberwatch v0.1.3\"\n", target: "v0.1.4", wantErr: true},
+		{name: "reports a longer version containing the target", script: "#!/bin/sh\necho \"oberwatch v0.1.40\"\n", target: "v0.1.4", wantErr: true},
+		{name: "embeds the target in unrelated output", script: "#!/bin/sh\necho \"not-oberwatch v0.1.4\"\n", target: "v0.1.4", wantErr: true},
 		{name: "reports nothing", script: "#!/bin/sh\nexit 0\n", target: "v0.1.4", wantErr: true},
 		{name: "exits non-zero", script: "#!/bin/sh\necho \"oberwatch v0.1.4\"\nexit 3\n", target: "v0.1.4", wantErr: true},
 		{name: "writes to stderr only", script: "#!/bin/sh\necho \"oberwatch v0.1.4\" >&2\n", target: "v0.1.4", wantErr: true},

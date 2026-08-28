@@ -366,7 +366,8 @@ func verifyBinaryVersion(ctx context.Context, binaryPath string, target Version)
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("run %s version: %w", binaryPath, err)
 	}
-	if !strings.Contains(output.String(), target.Tag()) {
+	firstLine, _, _ := strings.Cut(output.String(), "\n")
+	if firstLine != "oberwatch "+target.Tag() {
 		return fmt.Errorf("staged binary does not report %s", target)
 	}
 	return nil
