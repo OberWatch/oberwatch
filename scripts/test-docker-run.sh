@@ -38,6 +38,19 @@ docker run --detach \
   fail 'container is not running'
 printf 'PASS: container is running\n'
 
+RUN_UID=$(docker exec "$CONTAINER" id -u)
+RUN_USER=$(docker inspect --format '{{.Config.User}}' "$CONTAINER")
+[ -n "$RUN_UID" ] && [ "$RUN_UID" != 0 ] && [ "$RUN_USER" = oberwatch ] || \
+  fail "container runs as '${RUN_USER}' (uid '${RUN_UID}'), want the non-root oberwatch user"
+printf 'PASS: container runs as the non-root oberwatch user (uid %s)\n' "$RUN_UID"
+
+# The binary is statically linked, so the runtime image must not need a SQLite
+# shared library.
+if docker exec "$CONTAINER" sh -c 'ls /usr/lib/libsqlite3.so* /lib/libsqlite3.so* 2>/dev/null' | grep -q .; then
+  fail 'runtime image still ships a SQLite shared library'
+fi
+printf 'PASS: runtime image carries no SQLite shared library\n'
+
 PORT_MAPPING=$(docker port "$CONTAINER" 8080/tcp)
 HOST_PORT=${PORT_MAPPING##*:}
 [ -n "$HOST_PORT" ] || fail 'published port was not assigned'

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- SQLite now uses the pure Go driver `modernc.org/sqlite` instead of `github.com/mattn/go-sqlite3`. Release binaries and the Docker image are built with `CGO_ENABLED=0` and are statically linked, so no C toolchain is needed to build them and no `libsqlite3` is needed to run them. Linux amd64 and arm64 remain the only published targets
+- The database file is unchanged. Upgrading to this release, and downgrading from it, needs no data step: a database written by either version opens under the other at every schema version, with `PRAGMA integrity_check` reporting `ok`
+- The bundled SQLite goes from 3.45.1 to 3.53.3, because the driver carries its own copy. No schema or query in Oberwatch depends on a version-specific feature
+- Linux release binaries grow by about 2.2 MB: the stripped amd64 build goes from 10,923,760 to 13,164,706 bytes (+20.5%). Release tarballs and Docker layers grow by the same amount
+- SQLite error text changes, which is visible in logs and in API error messages. A duplicate key now reads `constraint failed: UNIQUE constraint failed: settings.key (1555)` instead of `UNIQUE constraint failed: settings.key`, a missing table reads `SQL logic error: no such table: t`, and a lock timeout reads `database is locked (5) (SQLITE_BUSY)`. Anything that greps logs or parses these strings needs the new wording
 - `alerts.webhook_url` must be an absolute `http` or `https` URL and `alerts.slack_webhook_url` must be an `https://hooks.slack.com/services/...` URL; `oberwatch validate` and startup reject anything else
 
 ### Fixed

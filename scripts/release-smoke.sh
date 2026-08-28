@@ -78,9 +78,8 @@ BINARY="$BINARY_ARG"
 if [ -z "$BINARY" ]; then
   GO="$(find_go)"
   export GOCACHE="${GOCACHE:-/tmp/go-build}"
-  # go-sqlite3 needs cgo and the GoReleaser builds set CGO_ENABLED=1, so pin it
-  # here too instead of inheriting a CGO_ENABLED=0 environment.
-  export CGO_ENABLED=1
+  # Match the GoReleaser builds, which are static and need no C toolchain.
+  export CGO_ENABLED=0
   BINARY="${RELEASE_SMOKE_DIR}/oberwatch"
   COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

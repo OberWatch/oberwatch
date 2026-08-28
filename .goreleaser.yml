@@ -1,27 +1,14 @@
 version: 2
 builds:
-  - id: oberwatch-linux-amd64
+  # The SQLite driver is pure Go, so one entry builds both architectures
+  # statically and nothing here needs a C toolchain.
+  - id: oberwatch-linux
     main: ./cmd/oberwatch
     binary: oberwatch
     env:
-      - CGO_ENABLED=1
-      - CC=gcc
+      - CGO_ENABLED=0
     goos: [linux]
-    goarch: [amd64]
-    ldflags:
-      - -s -w
-      - -X main.version=v{{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.built={{.Date}}
-
-  - id: oberwatch-linux-arm64
-    main: ./cmd/oberwatch
-    binary: oberwatch
-    env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-    goos: [linux]
-    goarch: [arm64]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
       - -X main.version=v{{.Version}}
