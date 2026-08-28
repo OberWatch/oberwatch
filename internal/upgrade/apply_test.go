@@ -525,6 +525,9 @@ func TestApplier_ResolveInstallPath(t *testing.T) {
 				if err := os.Mkdir(dir, 0o777); err != nil {
 					t.Fatalf("Mkdir() error = %v", err)
 				}
+				if err := os.Chmod(dir, 0o777); err != nil {
+					t.Fatalf("Chmod() error = %v", err)
+				}
 				path := filepath.Join(dir, BinaryName)
 				if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
 					t.Fatalf("WriteFile() error = %v", err)
@@ -539,6 +542,9 @@ func TestApplier_ResolveInstallPath(t *testing.T) {
 				dir := filepath.Join(t.TempDir(), "bin")
 				if err := os.Mkdir(dir, 0o775); err != nil {
 					t.Fatalf("Mkdir() error = %v", err)
+				}
+				if err := os.Chmod(dir, 0o775); err != nil {
+					t.Fatalf("Chmod() error = %v", err)
 				}
 				path := filepath.Join(dir, BinaryName)
 				if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
