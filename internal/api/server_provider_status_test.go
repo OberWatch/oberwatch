@@ -31,10 +31,7 @@ func newProviderStatusTestServer(checker providerStatusChecker, ollamaBaseURL st
 	return &Server{
 		providerChecker: checker,
 		ollamaBaseURL:   ollamaBaseURL,
-		providerRows: []provider.StatusRow{
-			pendingProviderRow("openai", "OpenAI"),
-			pendingProviderRow("anthropic", "Anthropic"),
-		},
+		providerRows:    initialProviderRows(ollamaBaseURL),
 	}
 }
 

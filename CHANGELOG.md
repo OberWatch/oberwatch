@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A provider card on the Settings page no longer disappears when its check fails: a configured loopback Ollama reports `unreachable` and returns to `operational` once it answers again, and OpenAI and Anthropic stay visible as `status_unavailable` when their public status feeds cannot be read
+- No Ollama card is shown when no loopback base URL is configured
+- The Settings page re-reads provider status every 15 seconds while it is open, so a failure or a recovery shows up without a reload, and a failed re-read keeps the last known cards instead of blanking the grid
+- A provider card that has not been checked yet is shown as pending rather than coloured as a failure
+
 ## [0.1.3] - 2026-08-27
 
 ### Added
