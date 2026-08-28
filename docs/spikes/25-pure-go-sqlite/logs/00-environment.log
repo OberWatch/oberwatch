@@ -1,0 +1,14 @@
+# spike environment
+date_utc=2026-08-28T14:30:24Z
+go=go version go1.26.0 linux/amd64
+goroot=/tmp/go1.26.0
+host=Linux 7.0.0-29-generic x86_64
+cpus=8
+mem_total_kb=15983296
+cc=gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+clang=not installed
+repo_head=8fec3d755ade3215eb4e78b1a0a71c6698d219d6
+repo_branch=spike/25-pure-go-sqlite
+pinned_modernc=v1.57.0
+pinned_ncruces=v0.35.3
+work_dir=/home/hermes/.cache/oberwatch-spike-25

@@ -340,11 +340,19 @@ func (m *BudgetManager) loadPersistedTasks(ctx context.Context) error {
 // written on every settlement rather than only on the periodic flush, so a
 // restart cannot lose settled spend; writing just the named task keeps that
 // per-request cost independent of how many tasks the process has seen.
+//
+// It holds flushMu for reading like every other store flush, so a task record
+// carrying the agent that just settled cannot be written after DeleteAgent has
+// already cleared that pointer.
 func (m *BudgetManager) flushTaskIfNeeded(taskID string) {
 	taskID = strings.TrimSpace(taskID)
 	if m.store == nil || taskID == "" {
 		return
 	}
+
+	m.flushMu.RLock()
+	defer m.flushMu.RUnlock()
+
 	record, ok := m.takeDirtyTaskRecord(taskID)
 	if !ok {
 		return

@@ -273,13 +273,13 @@ Oberwatch publishes images across two registries with different intent.
 
 | Channel | Registry | Purpose |
 | --- | --- | --- |
-| `latest`, `0.1`, `0.1.3` | Docker Hub + GHCR | Stable tagged releases |
+| `latest`, `0.1`, `0.1.4` | Docker Hub + GHCR | Stable tagged releases |
 | `beta` | GHCR | Preview build from `main` |
 | `staging` | GHCR | Integration/staging build |
 | `sha-<commit>` | GHCR | Immutable branch build for debugging and verification |
 
 Recommended usage:
-- Production: `kaissb/oberwatch:0.1.3` or `kaissb/oberwatch:latest`
+- Production: `kaissb/oberwatch:0.1.4` or `kaissb/oberwatch:latest`
 - Preview testing: `ghcr.io/oberwatch/oberwatch:beta`
 - Staging environments: `ghcr.io/oberwatch/oberwatch:staging`
 

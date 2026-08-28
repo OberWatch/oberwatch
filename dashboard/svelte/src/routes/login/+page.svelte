@@ -6,7 +6,7 @@
   let username = $state('admin');
   let password = $state('');
   let errorMessage = $state<string | null>(null);
-  let version = $state('v0.1.3');
+  let version = $state('v0.1.4');
 
   async function signIn(): Promise<void> {
     errorMessage = null;

@@ -2,9 +2,23 @@
   import '../app.css';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { fetchJSON } from '$lib/api';
+  import { ApiError, fetchJSON } from '$lib/api';
   import { connectStream } from '$lib/sse';
-  import type { AuthStatusResponse, BudgetAlertEvent, HealthResponse } from '$lib/types';
+  import {
+    UPGRADE_POLL_INTERVAL_MS,
+    upgradeConfirmationLines,
+    upgradeFailureMessage,
+    upgradePollDecision,
+    upgradeResultNote,
+    upgradeView
+  } from '$lib/upgrade';
+  import type {
+    AuthStatusResponse,
+    BudgetAlertEvent,
+    HealthResponse,
+    UpgradeStartResponse,
+    UpgradeStatusResponse
+  } from '$lib/types';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
@@ -32,11 +46,26 @@
   let authLoading = $state(true);
   let authStatus = $state<AuthStatusResponse | null>(null);
   let logoutError = $state<string | null>(null);
-  let displayVersion = $state('v0.1.3');
+  let displayVersion = $state('v0.1.4');
   let emergencyStop = $state(false);
   let emergencyBusy = $state(false);
   let alertToasts = $state<{ id: number; agent: string; threshold: number }[]>([]);
   let nextToastID = 1;
+
+  type UpgradePhase = 'idle' | 'confirming' | 'applying' | 'waiting' | 'failed';
+
+  let upgradeStatus = $state<UpgradeStatusResponse | null>(null);
+  let upgradePhase = $state<UpgradePhase>('idle');
+  let upgradeError = $state<string | null>(null);
+  let upgradeTarget = $state('');
+  let upgradeWaitTimedOut = $state(false);
+
+  const upgrade = $derived(upgradeView(upgradeStatus));
+  const upgradeResult = $derived(upgradeResultNote(upgradeStatus?.last_result));
+  const upgradeConfirmation = $derived(
+    upgradeConfirmationLines(upgradeTarget || upgradeStatus?.latest_version || '')
+  );
+  const upgradeBusy = $derived(upgradePhase === 'applying' || upgradePhase === 'waiting');
 
   function isActive(pathname: string, href: string): boolean {
     if (href === '/') {
@@ -96,6 +125,87 @@
     }
   }
 
+  /**
+   * A failed read is not an outcome: during the restart the server is briefly
+   * down, and blanking the footer or reporting a failure would claim something
+   * that did not happen. The last known status stays on screen instead.
+   */
+  async function loadUpgradeStatus(): Promise<UpgradeStatusResponse | null> {
+    try {
+      const next = await fetchJSON<UpgradeStatusResponse>('/upgrade/status');
+      upgradeStatus = next;
+      return next;
+    } catch {
+      return null;
+    }
+  }
+
+  function beginUpgrade(): void {
+    upgradeError = null;
+    upgradeWaitTimedOut = false;
+    upgradeTarget = upgradeStatus?.latest_version ?? '';
+    upgradePhase = 'confirming';
+  }
+
+  function cancelUpgrade(): void {
+    upgradePhase = 'idle';
+  }
+
+  /**
+   * The request carries no body. There is no supported way to name a version,
+   * tag, URL or path: the release installed is the one the server's own check
+   * returned.
+   */
+  async function confirmUpgrade(): Promise<void> {
+    upgradePhase = 'applying';
+    upgradeError = null;
+    upgradeWaitTimedOut = false;
+
+    try {
+      const started = await fetchJSON<UpgradeStartResponse>('/upgrade', { method: 'POST' });
+      upgradeTarget = started.tag;
+      upgradePhase = 'waiting';
+      await waitForRestart(started.tag);
+    } catch (error) {
+      // Only a real HTTP answer tells us the upgrade did not start. A dropped
+      // connection is ambiguous — the restart itself can end the request — so
+      // it is treated as "outcome not known yet" and waited on, rather than
+      // reported as a failure that may not have happened.
+      if (!(error instanceof ApiError)) {
+        upgradePhase = 'waiting';
+        await waitForRestart(upgradeTarget);
+        return;
+      }
+      upgradeError = upgradeFailureMessage(error.details?.error?.code, error.message);
+      upgradePhase = 'failed';
+      await loadUpgradeStatus();
+    }
+  }
+
+  async function waitForRestart(target: string): Promise<void> {
+    const startedAt = Date.now();
+
+    for (;;) {
+      await sleep(UPGRADE_POLL_INTERVAL_MS);
+      const next = await loadUpgradeStatus();
+      const decision = upgradePollDecision({ status: next, target, elapsedMs: Date.now() - startedAt });
+      if (decision === 'continue') continue;
+
+      upgradeWaitTimedOut = decision === 'timeout';
+      upgradePhase = 'idle';
+      if (decision === 'done') {
+        await loadHealthVersion();
+      }
+      return;
+    }
+  }
+
+  function sleep(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+  }
+
   async function resumeOperations(): Promise<void> {
     emergencyBusy = true;
     try {
@@ -120,6 +230,11 @@
     void (async () => {
       await Promise.all([loadAuthStatus(), loadHealthVersion()]);
       await syncRoute();
+      // The upgrade status is authenticated, so it is only read once a session
+      // is confirmed rather than on the login and setup screens.
+      if (authStatus?.authenticated) {
+        await loadUpgradeStatus();
+      }
     })();
 
     const stream = connectStream((eventName, data) => {
@@ -191,7 +306,83 @@
         {#if logoutError}
           <p class="mt-2 text-xs text-danger">{logoutError}</p>
         {/if}
-        <div class="mt-3 text-xs text-text-secondary">{displayVersion}</div>
+
+        <div class="mt-3 flex items-center justify-between gap-2">
+          <span class="text-xs text-text-secondary">{displayVersion}</span>
+
+          {#if upgradeBusy}
+            <span class="text-xs text-text-secondary" role="status" aria-busy="true">
+              {upgradePhase === 'applying' ? 'Verifying release' : 'Restarting'}
+            </span>
+          {:else if upgrade.kind === 'available' && upgradePhase !== 'confirming'}
+            <button
+              type="button"
+              class="rounded-md border border-accent/40 px-2 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              onclick={beginUpgrade}
+            >
+              {upgrade.action}
+            </button>
+          {:else if upgrade.kind === 'checking'}
+            <span class="text-xs text-text-muted">{upgrade.note}</span>
+          {:else if upgrade.kind === 'unavailable'}
+            <span class="text-xs text-text-muted" title="The release check could not be completed.">
+              {upgrade.note}
+            </span>
+          {/if}
+        </div>
+
+        {#if upgradePhase === 'confirming'}
+          <div class="mt-3 rounded-md border border-border-default bg-elevated p-3">
+            <p class="text-xs font-semibold text-text-primary">Install {upgradeTarget}?</p>
+            <ul class="mt-2 list-disc space-y-1 pl-4 text-xs text-text-secondary">
+              {#each upgradeConfirmation as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+            <div class="mt-3 flex gap-2">
+              <button
+                type="button"
+                class="rounded-md bg-accent px-2 py-1 text-xs font-medium text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                onclick={confirmUpgrade}
+              >
+                Install and restart
+              </button>
+              <button
+                type="button"
+                class="rounded-md border border-border-default px-2 py-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                onclick={cancelUpgrade}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if upgrade.kind === 'unsupported'}
+          <p class="mt-2 text-xs text-text-muted" role="status">{upgrade.note}</p>
+        {/if}
+
+        <div aria-live="polite">
+          {#if upgradeError}
+            <p class="mt-2 text-xs text-danger">{upgradeError}</p>
+          {/if}
+          {#if upgradeWaitTimedOut}
+            <p class="mt-2 text-xs text-warning">
+              The service has not come back yet. Reload the dashboard to see the result.
+            </p>
+          {/if}
+          {#if upgradeResult && upgradePhase === 'idle'}
+            <p
+              class={`mt-2 text-xs ${upgradeResult.tone === 'success'
+                ? 'text-success'
+                : upgradeResult.tone === 'warning'
+                  ? 'text-warning'
+                  : 'text-danger'}`}
+            >
+              {upgradeResult.text}
+            </p>
+          {/if}
+        </div>
       </div>
     </aside>
 

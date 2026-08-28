@@ -1,0 +1,48 @@
+## fixtures written by mattn, opened by modernc
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.04s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.044s
+## fixtures written by mattn, opened by ncruces
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.05s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.051s
+## fixtures written by modernc, opened by mattn
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.03s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.035s
+## fixtures written by modernc, opened by ncruces
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.04s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.040s
+## fixtures written by ncruces, opened by mattn
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.04s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.042s
+## fixtures written by ncruces, opened by modernc
+    spike_driver_test.go:234: fixture v1 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v2 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v3 opened: version=4 costs=100 integrity=ok
+    spike_driver_test.go:234: fixture v4 opened: version=4 costs=100 integrity=ok
+--- PASS: TestSpike_OpenFixture (0.04s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.040s

@@ -1,0 +1,84 @@
+########## modernc (CGO_ENABLED=0)
+## linux/amd64 cold build (-a)
+wall=28.84s user=67.79s sys=6.89s maxrss=735476KB
+exit=0
+## linux/amd64 warm rebuild (touch main)
+wall=0.42s user=0.16s sys=0.06s maxrss=35900KB
+exit=0
+## linux/amd64 cold build of ./internal/storage only
+wall=32.55s user=65.78s sys=6.34s maxrss=738776KB
+exit=0
+## linux/arm64
+wall=23.14s user=65.63s sys=7.08s maxrss=736160KB
+exit=0
+## darwin/amd64
+wall=21.85s user=62.14s sys=6.90s maxrss=738116KB
+exit=0
+## darwin/arm64
+wall=20.37s user=61.60s sys=6.98s maxrss=782372KB
+exit=0
+## artifacts (magic 7f454c46=ELF, cffaedfe=Mach-O 64)
+ob-modernc-darwin-amd64            19139872 bytes  magic=cffaedfe
+ob-modernc-darwin-arm64            18391282 bytes  magic=cffaedfe
+ob-modernc-linux-amd64             18756366 bytes  magic=7f454c46
+ob-modernc-linux-arm64             17889471 bytes  magic=7f454c46
+## release-style sizes (-ldflags '-s -w', as GoReleaser builds them)
+rel-modernc-linux-amd64            13123746 bytes
+rel-modernc-linux-arm64            12517538 bytes
+rel-modernc-darwin-amd64           13364672 bytes
+rel-modernc-darwin-arm64           12782962 bytes
+## ldd linux/amd64:
+	not a dynamic executable
+## go version -m (driver + build settings):
+	dep	modernc.org/libc	v1.74.4	h1:fX1Omw4o2/1C2iRkkIsrQTasJQldLhRmuPreXLoWs9k=
+	dep	modernc.org/mathutil	v1.7.1	h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=
+	dep	modernc.org/memory	v1.11.0	h1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=
+	dep	modernc.org/sqlite	v1.57.0	h1:qNQP6xnx5M0ISNtlnxoOX0+cD5bJ0/gr9aMmndFczzg=
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+
+########## ncruces (CGO_ENABLED=0)
+## linux/amd64 cold build (-a)
+wall=23.22s user=78.97s sys=7.93s maxrss=1337740KB
+exit=0
+## linux/amd64 warm rebuild (touch main)
+wall=0.09s user=0.17s sys=0.09s maxrss=33200KB
+exit=0
+## linux/amd64 cold build of ./internal/storage only
+wall=23.47s user=78.04s sys=7.36s maxrss=1326412KB
+exit=0
+## linux/arm64
+wall=24.20s user=79.94s sys=7.82s maxrss=1335700KB
+exit=0
+## darwin/amd64
+wall=23.02s user=78.40s sys=8.00s maxrss=1411000KB
+exit=0
+## darwin/arm64
+wall=24.57s user=79.93s sys=8.17s maxrss=1408704KB
+exit=0
+## artifacts (magic 7f454c46=ELF, cffaedfe=Mach-O 64)
+ob-ncruces-darwin-amd64            24083648 bytes  magic=cffaedfe
+ob-ncruces-darwin-arm64            22671986 bytes  magic=cffaedfe
+ob-ncruces-linux-amd64             24237594 bytes  magic=7f454c46
+ob-ncruces-linux-arm64             22690086 bytes  magic=7f454c46
+## release-style sizes (-ldflags '-s -w', as GoReleaser builds them)
+rel-ncruces-linux-amd64            15696034 bytes
+rel-ncruces-linux-arm64            14418082 bytes
+rel-ncruces-darwin-amd64           15870688 bytes
+rel-ncruces-darwin-arm64           14640322 bytes
+## ldd linux/amd64:
+	not a dynamic executable
+## go version -m (driver + build settings):
+	dep	github.com/ncruces/go-sqlite3	v0.35.3	h1:Ei07Zv1qfV/vyXzelhFsyS5Oh9TArBZHsmFk14Xv3GY=
+	dep	github.com/ncruces/go-sqlite3-wasm/v3	v3.2.35304	h1:5NoQAewtgKNK3G4bjNPxVoGXu6F6NzLXWCTdD5FFAEY=
+	dep	github.com/ncruces/julianday	v1.0.0	h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+
+########## mattn artifact for comparison
+ob-mattn-linux-amd64  16618240 bytes  magic=7f454c46
+rel-mattn-linux-amd64 10878672 bytes (-ldflags '-s -w')
+	dep	github.com/mattn/go-sqlite3	v1.14.22	h1:2gZY6PC6kBnID23Tichd1K+Z0oS6nE/XwU+Vz/5o4kU=
+	build	CGO_ENABLED=1

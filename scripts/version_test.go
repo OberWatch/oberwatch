@@ -231,10 +231,11 @@ func TestEmbeddedDashboardMatchesChangelog(t *testing.T) {
 	}
 }
 
-// TestEmbeddedDashboardProviderStatusContract ensures the checked-in bundle
-// consumed by Go embeds the array-based provider API and its safety copy.
-func TestEmbeddedDashboardProviderStatusContract(t *testing.T) {
-	t.Parallel()
+// embeddedBundle concatenates every JavaScript file in the checked-in dashboard
+// bundle, so a contract can be asserted against the whole thing without caring
+// which chunk the build happened to put a given string in.
+func embeddedBundle(t *testing.T) string {
+	t.Helper()
 
 	staticRoot := filepath.Join(repoRoot(t), "internal", "dashboard", "static")
 	var bundle strings.Builder
@@ -255,8 +256,49 @@ func TestEmbeddedDashboardProviderStatusContract(t *testing.T) {
 	if walkErr != nil {
 		t.Fatalf("walk embedded dashboard assets: %v", walkErr)
 	}
+	return bundle.String()
+}
 
-	contents := bundle.String()
+// TestEmbeddedDashboardAgentDeleteContract guards the same staleness trap as the
+// version check, for the agent delete UI: a bundle built before the delete
+// dialog existed ships a binary whose Agents page cannot delete anything, and
+// nothing else in the Go tests would notice. Only source string literals are
+// matched, because the minifier renames everything else.
+func TestEmbeddedDashboardAgentDeleteContract(t *testing.T) {
+	t.Parallel()
+
+	contents := embeddedBundle(t)
+
+	//nolint:govet // Keep the expectation next to the reason it exists.
+	tests := []struct {
+		name   string
+		needle string
+	}{
+		{name: "row action", needle: "Delete agent"},
+		{name: "typed confirmation step", needle: "Type the agent name to confirm"},
+		{name: "confirmation rule is stated", needle: "matches exactly"},
+		{name: "dialog is labelled for assistive tech", needle: "agent-delete-title"},
+		{name: "consequences name the rediscovery contract", needle: "not blocked"},
+		{name: "deletions elsewhere reach open pages", needle: "agent_deleted"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(contents, tt.needle) {
+				t.Errorf("embedded dashboard bundle is missing %q; rerun `make dashboard`", tt.needle)
+			}
+		})
+	}
+}
+
+// TestEmbeddedDashboardProviderStatusContract ensures the checked-in bundle
+// consumed by Go embeds the array-based provider API and its safety copy.
+func TestEmbeddedDashboardProviderStatusContract(t *testing.T) {
+	t.Parallel()
+
+	contents := embeddedBundle(t)
 	if !strings.Contains(contents, "Public service availability only") {
 		t.Error(`embedded dashboard bundle is missing "Public service availability only"`)
 	}

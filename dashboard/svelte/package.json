@@ -1,6 +1,6 @@
 {
   "name": "oberwatch-dashboard",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "packageManager": "npm@10.9.4",
@@ -17,7 +17,9 @@
     "test:unit": "node --test 'src/lib/**/*.test.ts'",
     "test:component-states": "node --test scripts/dashboard-states.contract.test.mjs scripts/skeleton.render.test.mjs scripts/reduced-motion.css.test.mjs scripts/npm-test-wiring.test.mjs",
     "test:provider-status": "node --test scripts/provider-status.contract.test.mjs",
-    "test": "npm run test:unit && npm run test:model-column && npm run test:costs-page && npm run test:component-states && npm run test:provider-status",
+    "test:agents-delete": "node --test scripts/agent-delete.render.test.mjs scripts/check-agents-delete.mjs",
+    "test:upgrade": "node --test scripts/upgrade.contract.test.mjs",
+    "test": "npm run test:unit && npm run test:model-column && npm run test:costs-page && npm run test:component-states && npm run test:provider-status && npm run test:agents-delete && npm run test:upgrade",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint:ts": "tsc --noEmit"
   },

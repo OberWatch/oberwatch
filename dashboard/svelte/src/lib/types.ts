@@ -33,6 +33,46 @@ export interface AuthStatusResponse {
   authenticated: boolean;
 }
 
+/**
+ * `succeeded` means the new binary is installed and the service was restarted.
+ * `restart_required` means it is installed but the old version is still running.
+ * `failed` means nothing was installed.
+ */
+export type UpgradeResultStatus = 'succeeded' | 'restart_required' | 'failed';
+
+/** The outcome the privileged installer recorded for the most recent attempt. */
+export interface UpgradeResult {
+  status: UpgradeResultStatus;
+  tag: string;
+  from?: string;
+  message: string;
+  finished_at?: string;
+}
+
+export interface UpgradeStatusResponse {
+  current_version: string;
+  /** Newest stable release tag. Absent until a release check has succeeded. */
+  latest_version?: string;
+  update_available: boolean;
+  /** RFC3339 time of the release check this answer reflects. Absent until one completes. */
+  checked_at?: string;
+  /** Why the last release check failed. Absent after a success. */
+  check_error?: string;
+  /** Whether this installation can apply an upgrade in place. */
+  supported: boolean;
+  unsupported_reason?: string;
+  /** What to do instead when `supported` is false. */
+  fallback?: string;
+  in_progress: boolean;
+  last_result?: UpgradeResult;
+}
+
+export interface UpgradeStartResponse {
+  status: string;
+  tag: string;
+  message: string;
+}
+
 export interface Budget {
   agent: string;
   period: string;
@@ -120,6 +160,19 @@ export interface AgentsResponse {
   agents: Agent[];
 }
 
+export interface AgentDeleteResponse {
+  status: 'deleted';
+  agent: string;
+  removed: {
+    agent_record: number;
+    cost_records: number;
+    alerts: number;
+    budget_snapshots: number;
+    tasks_detached: number;
+  };
+  recreated_on_next_request: boolean;
+}
+
 export interface Alert {
   id?: string;
   type: string;
@@ -177,6 +230,10 @@ export interface BudgetAlertEvent {
 export interface AgentKilledEvent {
   agent: string;
   reason: string;
+}
+
+export interface AgentDeletedEvent {
+  agent: string;
 }
 
 export interface EmergencyStopEvent {

@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	version = "v0.1.3"
+	version = "v0.1.4"
 	channel = "dev"
 	commit  = "dev"
 	built   = "unknown"
@@ -95,6 +95,7 @@ func newRootCmd() *cobra.Command {
 		newTestCmd(opts),
 		newValidateCmd(opts),
 		newInitCmd(opts),
+		newUpgradeCmd(opts),
 		newVersionCmd(),
 	)
 
@@ -662,7 +663,19 @@ func runServeRuntime(
 	costWriter := storage.NewBufferedCostWriter(store, bufferSize, logger)
 	defer costWriter.Close()
 
-	baseDispatcher := alert.NewDispatcher(cfg.Alerts, 5*time.Second, logger)
+	baseDispatcher, err := alert.NewDispatcher(cfg.Alerts, 5*time.Second, logger)
+	if err != nil {
+		return fmt.Errorf("initialize alert dispatcher: %w", err)
+	}
+	defer func() {
+		// Give queued alerts a short window to finish, then cancel anything still in flight.
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelDrain()
+		if drainErr := baseDispatcher.Drain(drainCtx); drainErr != nil {
+			logger.Warn("alert queue not fully drained at shutdown", "error", drainErr)
+		}
+		baseDispatcher.Close()
+	}()
 	var managementServer *api.Server
 	dispatcher := alertDispatchFunc(func(dispatchCtx context.Context, entry alert.Alert) {
 		if managementServer != nil {

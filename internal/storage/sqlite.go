@@ -14,8 +14,10 @@ import (
 
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
-	// Register SQLite driver with database/sql.
-	sqlite3 "github.com/mattn/go-sqlite3"
+	// Registers the "sqlite" driver with database/sql and supplies the error
+	// type isSQLiteConstraint inspects, so it is a named rather than a blank
+	// import.
+	sqlite "modernc.org/sqlite"
 )
 
 const currentSchemaVersion = 4
@@ -38,7 +40,7 @@ func NewSQLiteStore(dsn string, retention time.Duration, logger *slog.Logger) (*
 		dsn = "oberwatch.db"
 	}
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -737,6 +739,70 @@ func (s *SQLiteStore) RenameAgent(ctx context.Context, oldName string, newName s
 	return nil
 }
 
+// DeleteAgent removes one agent and every row that belongs only to it.
+//
+// The agent row, its cost records, its alerts, and its legacy budget snapshot
+// are deleted in one transaction. Task budgets are shared across agents and
+// are kept; a task that last ran under this agent has its last_agent cleared.
+// Settings and every other agent are untouched. It returns ErrAgentNotFound
+// when no agent row exists, so a second concurrent delete loses cleanly.
+func (s *SQLiteStore) DeleteAgent(ctx context.Context, name string) (AgentDeletion, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return AgentDeletion{}, fmt.Errorf("agent name must not be empty")
+	}
+	result := AgentDeletion{Agent: name}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentDeletion{}, fmt.Errorf("begin delete agent transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	deleted, err := execRowsAffected(ctx, tx, "DELETE FROM agents WHERE name = ?", name)
+	if err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete agent %q: %w", name, err)
+	}
+	if deleted == 0 {
+		err = ErrAgentNotFound
+		return AgentDeletion{}, err
+	}
+
+	if result.CostRecords, err = execRowsAffected(ctx, tx, "DELETE FROM cost_records WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete cost records for agent %q: %w", name, err)
+	}
+	if result.Alerts, err = execRowsAffected(ctx, tx, "DELETE FROM alerts WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete alerts for agent %q: %w", name, err)
+	}
+	if result.BudgetSnapshots, err = execRowsAffected(ctx, tx, "DELETE FROM budget_snapshots WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete budget snapshot for agent %q: %w", name, err)
+	}
+	if result.TasksDetached, err = execRowsAffected(ctx, tx, "UPDATE task_budgets SET last_agent = '' WHERE last_agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("detach tasks from agent %q: %w", name, err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return AgentDeletion{}, fmt.Errorf("commit delete agent transaction: %w", err)
+	}
+	return result, nil
+}
+
+func execRowsAffected(ctx context.Context, tx *sql.Tx, statement string, args ...any) (int64, error) {
+	execResult, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := execResult.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read rows affected: %w", err)
+	}
+	return affected, nil
+}
+
 // SaveBudgetSnapshot persists one agent budget state snapshot.
 func (s *SQLiteStore) SaveBudgetSnapshot(ctx context.Context, snapshot BudgetSnapshot) error {
 	if strings.TrimSpace(snapshot.Agent) == "" {
@@ -1143,9 +1209,18 @@ func splitCSVFloat64s(raw string) []float64 {
 	return result
 }
 
+// sqliteConstraint is the primary result code SQLITE_CONSTRAINT.
+const sqliteConstraint = 19
+
+// isSQLiteConstraint reports whether err is a constraint violation. The driver
+// returns the extended result code, so a primary key violation arrives as 1555
+// (SQLITE_CONSTRAINT_PRIMARYKEY) and a unique violation as 2067
+// (SQLITE_CONSTRAINT_UNIQUE). Both mask to 19, so mask the low byte instead of
+// matching a single extended code. The error is a pointer type; matching a
+// value type here would never match and would fail open.
 func isSQLiteConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrConstraint
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteConstraint
 }
 
 func boolToInt(value bool) int {
