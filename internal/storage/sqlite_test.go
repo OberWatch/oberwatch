@@ -1124,6 +1124,10 @@ func (s storeFunc) RenameAgent(context.Context, string, string) error {
 	return nil
 }
 
+func (s storeFunc) DeleteAgent(context.Context, string) (AgentDeletion, error) {
+	return AgentDeletion{}, nil
+}
+
 func (s storeFunc) SaveBudgetSnapshot(context.Context, BudgetSnapshot) error {
 	return nil
 }

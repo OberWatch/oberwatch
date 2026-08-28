@@ -160,6 +160,19 @@ export interface AgentsResponse {
   agents: Agent[];
 }
 
+export interface AgentDeleteResponse {
+  status: 'deleted';
+  agent: string;
+  removed: {
+    agent_record: number;
+    cost_records: number;
+    alerts: number;
+    budget_snapshots: number;
+    tasks_detached: number;
+  };
+  recreated_on_next_request: boolean;
+}
+
 export interface Alert {
   id?: string;
   type: string;
@@ -217,6 +230,10 @@ export interface BudgetAlertEvent {
 export interface AgentKilledEvent {
   agent: string;
   reason: string;
+}
+
+export interface AgentDeletedEvent {
+  agent: string;
 }
 
 export interface EmergencyStopEvent {

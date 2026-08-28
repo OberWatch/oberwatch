@@ -1,0 +1,75 @@
+########## mattn (CGO_ENABLED=1, required by -race)
+## go test -race -count=1 -run TestSpike ./internal/storage/
+ok  	github.com/OberWatch/oberwatch/internal/storage	11.615s
+wall=13.77s user=4.53s sys=1.11s maxrss=157440KB
+exit=0
+
+## existing suite: go test -race -count=1 -skip TestSpike ./...
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	1.195s
+ok  	github.com/OberWatch/oberwatch/internal/alert	1.028s
+ok  	github.com/OberWatch/oberwatch/internal/api	24.904s
+ok  	github.com/OberWatch/oberwatch/internal/budget	1.195s
+ok  	github.com/OberWatch/oberwatch/internal/config	1.242s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	1.054s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	1.047s
+ok  	github.com/OberWatch/oberwatch/internal/provider	4.039s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	1.328s
+ok  	github.com/OberWatch/oberwatch/internal/storage	1.205s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	1.425s
+wall=28.64s user=115.34s sys=3.02s maxrss=191448KB
+exit=0
+
+########## modernc (CGO_ENABLED=1, required by -race)
+## go test -race -count=1 -run TestSpike ./internal/storage/
+ok  	github.com/OberWatch/oberwatch/internal/storage	46.251s
+wall=77.56s user=82.64s sys=4.41s maxrss=871356KB
+exit=0
+
+## existing suite: go test -race -count=1 -skip TestSpike ./...
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	1.244s
+ok  	github.com/OberWatch/oberwatch/internal/alert	1.038s
+ok  	github.com/OberWatch/oberwatch/internal/api	26.213s
+ok  	github.com/OberWatch/oberwatch/internal/budget	1.512s
+ok  	github.com/OberWatch/oberwatch/internal/config	1.131s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	1.057s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	1.063s
+ok  	github.com/OberWatch/oberwatch/internal/provider	4.047s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	1.412s
+ok  	github.com/OberWatch/oberwatch/internal/storage	2.745s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	1.596s
+wall=29.82s user=120.60s sys=2.88s maxrss=267036KB
+exit=0
+
+########## ncruces (CGO_ENABLED=1, required by -race)
+## go test -race -count=1 -run TestSpike ./internal/storage/
+ok  	github.com/OberWatch/oberwatch/internal/storage	35.059s
+wall=61.46s user=62.64s sys=3.12s maxrss=828940KB
+exit=0
+
+## existing suite: go test -race -count=1 -skip TestSpike ./...
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	1.209s
+ok  	github.com/OberWatch/oberwatch/internal/alert	1.021s
+ok  	github.com/OberWatch/oberwatch/internal/api	24.347s
+ok  	github.com/OberWatch/oberwatch/internal/budget	1.313s
+ok  	github.com/OberWatch/oberwatch/internal/config	1.153s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	1.069s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	1.048s
+ok  	github.com/OberWatch/oberwatch/internal/provider	4.032s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	1.294s
+ok  	github.com/OberWatch/oberwatch/internal/storage	1.820s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	1.360s
+wall=28.10s user=120.88s sys=2.81s maxrss=255696KB
+exit=0
+

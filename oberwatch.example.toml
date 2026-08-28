@@ -169,10 +169,11 @@ method = "header"
 # Alert Delivery Settings
 # -----------------------------------------------------------------------------
 [alerts]
-# Generic webhook URL for alert POSTs.
+# Generic webhook URL for alert POSTs. Must be an absolute http or https URL.
 webhook_url = ""
 
 # Slack incoming webhook URL for alert notifications.
+# Must start with https://hooks.slack.com/services/.
 slack_webhook_url = ""
 
 [alerts.email]

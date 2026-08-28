@@ -171,6 +171,17 @@ func validateBudgetAction(field string, action BudgetAction) []string {
 func validateAlerts(alerts AlertsConfig) []string {
 	problems := make([]string, 0)
 
+	if strings.TrimSpace(alerts.WebhookURL) != "" {
+		if err := ValidateWebhookURL(alerts.WebhookURL); err != nil {
+			problems = append(problems, fmt.Sprintf("alerts.webhook_url %s", err.Error()))
+		}
+	}
+	if strings.TrimSpace(alerts.SlackWebhookURL) != "" {
+		if err := ValidateSlackWebhookURL(alerts.SlackWebhookURL); err != nil {
+			problems = append(problems, fmt.Sprintf("alerts.slack_webhook_url %s", err.Error()))
+		}
+	}
+
 	if alerts.Email.Enabled {
 		if strings.TrimSpace(alerts.Email.SMTPHost) == "" {
 			problems = append(problems, "alerts.email.smtp_host must not be empty when alerts.email.enabled is true")

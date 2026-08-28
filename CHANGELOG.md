@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Delete an agent: `DELETE /agents/{name}` removes the agent record, its cost records, its alerts and its legacy budget snapshot in one transaction
+- Task budgets are kept when their agent is deleted; only the `last_agent` pointer is cleared, so lifetime task totals and caps still apply
+- The delete response reports how many rows of each kind were removed and that the agent is recreated on its next request
+- An agent declared in the config file is rejected with `409 agent_protected`, because the next start would seed it again
+- Delete action on the Agents page, behind a dialog that requires the agent name to be typed and states what is removed, what is kept, and that the next proxied request recreates the agent with the default budget
+- `agent_deleted` SSE event, so an open Overview reloads when an agent is removed elsewhere
+
+### Changed
+- `alerts.webhook_url` must be an absolute `http` or `https` URL and `alerts.slack_webhook_url` must be an `https://hooks.slack.com/services/...` URL; `oberwatch validate` and startup reject anything else
+
 ### Fixed
+- Webhook URLs, embedded credentials and tokens are redacted from alert logs and error messages, and a failed response body is truncated before it is logged
+- Alert delivery runs off the request path through a bounded queue, so a slow or unreachable webhook no longer adds latency to proxied requests
+- Each webhook attempt is cancelled after at most ten seconds; transport errors, 408, 429 and 5xx responses are retried up to three times with exponential backoff, other 4xx responses are not retried
+- Each destination is delivered independently, so a failing generic webhook no longer holds up or fails a Slack alert
+- A Slack alert with no message text no longer builds an empty block that Slack rejects with a permanent 400
+- When the alert queue is full new alerts are dropped and logged at most once every thirty seconds with a drop count
 - A provider card on the Settings page no longer disappears when its check fails: a configured loopback Ollama reports `unreachable` and returns to `operational` once it answers again, and OpenAI and Anthropic stay visible as `status_unavailable` when their public status feeds cannot be read
 - No Ollama card is shown when no loopback base URL is configured
 - The Settings page re-reads provider status every 15 seconds while it is open, so a failure or a recovery shows up without a reload, and a failed re-read keeps the last known cards instead of blanking the grid
