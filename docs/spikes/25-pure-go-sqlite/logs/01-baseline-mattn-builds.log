@@ -1,0 +1,51 @@
+# baseline: mattn/go-sqlite3, go version go1.26.0 linux/amd64, host Linux 7.0.0-29-generic x86_64, 8 cpus
+
+## linux/amd64 CGO_ENABLED=1 cold build (-a)
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c: In function ‘sqlite3ShadowTableName’:
+sqlite3-binding.c:123133:9: warning: assignment discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+123133 |   zTail = strrchr(zName, '_');
+       |         ^
+wall=57.31s user=86.06s sys=7.07s maxrss=438880KB
+exit=0
+## linux/amd64 CGO_ENABLED=1 warm rebuild (touch main)
+wall=0.14s user=0.19s sys=0.08s maxrss=33220KB
+exit=0
+size_bytes=16618240 magic=7f454c46
+## linux/amd64 release-style build (-ldflags '-s -w', as GoReleaser builds it)
+wall=0.84s user=0.89s sys=0.29s maxrss=158020KB
+exit=0
+release_size_bytes=10878672
+## ldd:
+	linux-vdso.so.1 (0x00007da30b8ab000)
+	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007da30b600000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007da30b8ad000)
+
+## linux/amd64 CGO_ENABLED=0
+# github.com/OberWatch/oberwatch/internal/storage
+internal/storage/driver_spike.go:21:24: undefined: sqlite3.Error
+internal/storage/driver_spike.go:22:65: undefined: sqlite3.ErrConstraint
+internal/storage/driver_spike.go:29:24: undefined: sqlite3.Error
+exit=1
+## linux/arm64 CGO_ENABLED=0
+# github.com/OberWatch/oberwatch/internal/storage
+internal/storage/driver_spike.go:21:24: undefined: sqlite3.Error
+internal/storage/driver_spike.go:22:65: undefined: sqlite3.ErrConstraint
+internal/storage/driver_spike.go:29:24: undefined: sqlite3.Error
+exit=1
+## darwin/amd64 CGO_ENABLED=0
+# github.com/OberWatch/oberwatch/internal/storage
+internal/storage/driver_spike.go:21:24: undefined: sqlite3.Error
+internal/storage/driver_spike.go:22:65: undefined: sqlite3.ErrConstraint
+internal/storage/driver_spike.go:29:24: undefined: sqlite3.Error
+exit=1
+## darwin/arm64 CGO_ENABLED=0
+# github.com/OberWatch/oberwatch/internal/storage
+internal/storage/driver_spike.go:21:24: undefined: sqlite3.Error
+internal/storage/driver_spike.go:22:65: undefined: sqlite3.ErrConstraint
+internal/storage/driver_spike.go:29:24: undefined: sqlite3.Error
+exit=1
+## darwin/arm64 CGO_ENABLED=1 (needs a darwin cross toolchain)
+# runtime/cgo
+cgo: C compiler "clang" not found: exec: "clang": executable file not found in $PATH
+exit=1

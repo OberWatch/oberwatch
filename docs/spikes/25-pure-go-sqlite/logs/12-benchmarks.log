@@ -1,0 +1,78 @@
+########## mattn (CGO_ENABLED=1)
+## go test -run '^$' -bench BenchmarkSpike -benchmem -benchtime 2s -count=3
+goos: linux
+goarch: amd64
+pkg: github.com/OberWatch/oberwatch/internal/storage
+cpu: AMD EPYC-Rome Processor
+BenchmarkSpike_SaveCostRecord-8           	   19203	    118814 ns/op	    1576 B/op	      22 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   20594	    120994 ns/op	    1576 B/op	      22 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   18788	    128213 ns/op	    1576 B/op	      22 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   18184	    134695 ns/op	    1720 B/op	      25 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   18206	    136629 ns/op	    1720 B/op	      25 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   18811	    145496 ns/op	    1720 B/op	      25 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      48	  63265736 ns/op	 6508895 B/op	  110054 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      33	  66091917 ns/op	 6508797 B/op	  110054 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      46	  70304926 ns/op	 6508816 B/op	  110054 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18516	    135915 ns/op	    2040 B/op	      36 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18895	    149389 ns/op	    2040 B/op	      36 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   17664	    142018 ns/op	    2040 B/op	      36 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     100	  20741556 ns/op	    7910 B/op	     245 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     120	  21071839 ns/op	    7895 B/op	     245 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     220	  10953398 ns/op	    7888 B/op	     246 allocs/op
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	71.530s
+wall=72.23s user=24.50s sys=11.22s maxrss=154000KB
+exit=0
+
+########## modernc (CGO_ENABLED=0)
+## go test -run '^$' -bench BenchmarkSpike -benchmem -benchtime 2s -count=3
+goos: linux
+goarch: amd64
+pkg: github.com/OberWatch/oberwatch/internal/storage
+cpu: AMD EPYC-Rome Processor
+BenchmarkSpike_SaveCostRecord-8           	   14630	    160693 ns/op	     816 B/op	      17 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   14520	    167393 ns/op	     816 B/op	      17 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   15567	    158342 ns/op	     816 B/op	      17 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   14079	    174431 ns/op	     960 B/op	      20 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   13484	    241528 ns/op	     960 B/op	      20 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   10000	    253363 ns/op	     960 B/op	      20 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      30	  82690321 ns/op	 6508952 B/op	  110047 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      24	  92592155 ns/op	 6508788 B/op	  110047 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      38	  53945801 ns/op	 6508826 B/op	  110046 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   19874	    126185 ns/op	    1232 B/op	      30 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18535	    127960 ns/op	    1232 B/op	      30 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   19596	    128659 ns/op	    1232 B/op	      30 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     172	  13892554 ns/op	    6852 B/op	     168 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     169	  14522309 ns/op	    6846 B/op	     168 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     176	  13891635 ns/op	    6865 B/op	     168 allocs/op
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	69.159s
+wall=69.68s user=27.58s sys=12.39s maxrss=209588KB
+exit=0
+
+########## ncruces (CGO_ENABLED=0)
+## go test -run '^$' -bench BenchmarkSpike -benchmem -benchtime 2s -count=3
+goos: linux
+goarch: amd64
+pkg: github.com/OberWatch/oberwatch/internal/storage
+cpu: AMD EPYC-Rome Processor
+BenchmarkSpike_SaveCostRecord-8           	   15912	    165107 ns/op	    1272 B/op	      15 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   14216	    150468 ns/op	    1272 B/op	      15 allocs/op
+BenchmarkSpike_SaveCostRecord-8           	   10000	    218436 ns/op	    1272 B/op	      15 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   14982	    187592 ns/op	    1416 B/op	      18 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   10000	    209464 ns/op	    1416 B/op	      18 allocs/op
+BenchmarkSpike_SaveCostRecordParallel-8   	   14811	    181470 ns/op	    1417 B/op	      18 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      33	  79998765 ns/op	 7468683 B/op	  150047 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      32	  98278103 ns/op	 7468724 B/op	  150047 allocs/op
+BenchmarkSpike_QueryCosts10k-8            	      31	  68013844 ns/op	 7468644 B/op	  150047 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18471	    133919 ns/op	    1656 B/op	      27 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18632	    127571 ns/op	    1656 B/op	      27 allocs/op
+BenchmarkSpike_UpsertAgent-8              	   18228	    131481 ns/op	    1656 B/op	      27 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     164	  13596078 ns/op	   35028 B/op	     655 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     178	  13373928 ns/op	   34971 B/op	     655 allocs/op
+BenchmarkSpike_OpenAndMigrate-8           	     176	  15003926 ns/op	   35032 B/op	     655 allocs/op
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	68.993s
+wall=69.57s user=36.39s sys=10.39s maxrss=217080KB
+exit=0
+
