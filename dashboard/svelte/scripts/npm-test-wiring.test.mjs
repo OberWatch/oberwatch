@@ -34,7 +34,8 @@ test('npm test runs every script-based suite in scripts/', () => {
     'scripts/reduced-motion.css.test.mjs',
     'scripts/provider-status.contract.test.mjs',
     'scripts/agent-delete.render.test.mjs',
-    'scripts/check-agents-delete.mjs'
+    'scripts/check-agents-delete.mjs',
+    'scripts/upgrade.contract.test.mjs'
   ]) {
     assert.match(
       resolved,
