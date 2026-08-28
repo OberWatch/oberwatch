@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Delete an agent: `DELETE /agents/{name}` removes the agent record, its cost records, its alerts and its legacy budget snapshot in one transaction
+- Task budgets are kept when their agent is deleted; only the `last_agent` pointer is cleared, so lifetime task totals and caps still apply
+- The delete response reports how many rows of each kind were removed and that the agent is recreated on its next request
+- An agent declared in the config file is rejected with `409 agent_protected`, because the next start would seed it again
+- Delete action on the Agents page, behind a dialog that requires the agent name to be typed and states what is removed, what is kept, and that the next proxied request recreates the agent with the default budget
+- `agent_deleted` SSE event, so an open Overview reloads when an agent is removed elsewhere
+
 ### Changed
 - `alerts.webhook_url` must be an absolute `http` or `https` URL and `alerts.slack_webhook_url` must be an `https://hooks.slack.com/services/...` URL; `oberwatch validate` and startup reject anything else
 

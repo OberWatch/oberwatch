@@ -28,6 +28,7 @@ type Store interface {
 	GetAgent(context.Context, string) (AgentRecord, bool, error)
 	ListAgents(context.Context) ([]AgentRecord, error)
 	RenameAgent(context.Context, string, string) error
+	DeleteAgent(context.Context, string) (AgentDeletion, error)
 	SaveBudgetSnapshot(context.Context, BudgetSnapshot) error
 	LoadBudgetSnapshots(context.Context) ([]BudgetSnapshot, error)
 	GetSetting(context.Context, string) (string, bool, error)
@@ -36,6 +37,19 @@ type Store interface {
 	UpsertTask(context.Context, TaskRecord) error
 	GetTask(context.Context, string) (TaskRecord, bool, error)
 	ListTasks(context.Context) ([]TaskRecord, error)
+}
+
+// AgentDeletion reports exactly which agent-owned rows one DeleteAgent call removed.
+//
+// Settings, pricing, the global budget, and other agents are never touched.
+// Task budgets are shared across agents, so they are kept; only their
+// last_agent pointer is cleared when it named the deleted agent.
+type AgentDeletion struct {
+	Agent           string
+	CostRecords     int64
+	Alerts          int64
+	BudgetSnapshots int64
+	TasksDetached   int64
 }
 
 // TaskRecord is the persisted lifetime spend total for one task.
