@@ -47,6 +47,10 @@
   let newPassword = $state('');
   let confirmPassword = $state('');
 
+  // Not reactive: nothing renders it. It only keeps the interval from starting a
+  // second /health read while one is still outstanding.
+  let refreshInFlight = false;
+
   const phase = $derived(loadPhase({ loading, errorMessage, hasData: true }));
   const providerLastChecked = $derived(providerObservedAt(providerRows));
 
@@ -109,16 +113,26 @@
    * provider that fails or recovers shows up without a reload or a new login.
    * It never touches the page-wide `loading` flag, and a failed read keeps the
    * cards that are already on screen rather than blanking the grid.
+   *
+   * At most one read is ever outstanding. Without that guard a slow `/health`
+   * would let ticks stack up, and a late reply could overwrite a newer one with
+   * older statuses. It also stands down while a full load owns the page: during
+   * `loading` the cards are behind the skeleton, and while `errorMessage` is set
+   * the whole section is replaced by ErrorState and its retry button, so
+   * anything written here would never be shown.
    */
   async function refreshProviderStatus(): Promise<void> {
-    if (loading) return;
+    if (loading || errorMessage || refreshInFlight) return;
 
+    refreshInFlight = true;
     try {
       applyHealth(await fetchJSON<HealthResponse>('/health'));
     } catch (err) {
       providerRows = nextProviderRows(providerRows, { ok: false });
       providerRefreshWarning =
         err instanceof Error ? err.message : 'Provider status could not be refreshed.';
+    } finally {
+      refreshInFlight = false;
     }
   }
 
@@ -243,7 +257,7 @@
           <div class="rounded-md border border-border-default bg-elevated px-3 py-2" title={provider.detail}>
             <div class="flex items-center justify-between gap-3">
               <span class="text-sm text-text-primary">{provider.label}</span>
-              <StatusBadge status={providerBadgeStatus(provider.status)} />
+              <StatusBadge status={providerBadgeStatus(provider)} />
             </div>
             <p class="mt-1 text-xs text-text-secondary">{providerStatusLabel(provider)}</p>
           </div>

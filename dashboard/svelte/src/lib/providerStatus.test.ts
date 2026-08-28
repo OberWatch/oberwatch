@@ -73,8 +73,25 @@ test('providerBadgeStatus maps each availability to one badge colour', () => {
     { status: 'unreachable', want: 'error' }
   ];
   for (const c of cases) {
-    assert.equal(providerBadgeStatus(c.status), c.want, c.status);
+    assert.equal(providerBadgeStatus(row({ provider: 'x', status: c.status })), c.want, c.status);
   }
+});
+
+test('providerBadgeStatus never colours a never-probed row as a failure', () => {
+  // The placeholder statuses the API serves before the first probe. Neither was
+  // observed, so neither may be shown as a red verdict.
+  for (const status of ['status_unavailable', 'unreachable'] as const) {
+    assert.equal(
+      providerBadgeStatus(row({ provider: 'x', status, observed_at: undefined })),
+      'pending',
+      `pending ${status}`
+    );
+  }
+  assert.equal(
+    providerBadgeStatus(row({ provider: 'x', status: 'operational', observed_at: undefined })),
+    'pending',
+    'a pending row is not reported as operational either'
+  );
 });
 
 test('isProviderPending is true only without an observed_at', () => {

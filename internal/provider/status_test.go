@@ -279,9 +279,17 @@ func TestOllamaConfigured_MatchesCheckOllamaRowPresence(t *testing.T) {
 
 			// The helper must agree with the checker, which never sends a request
 			// for a rejected URL and always returns a row for an accepted one.
-			checker := &Checker{ollamaTransport: &recordingTransport{}}
+			transport := &recordingTransport{}
+			checker := &Checker{ollamaTransport: transport}
 			if _, ok := checker.CheckOllama(context.Background(), tt.baseURL); ok != tt.want {
 				t.Fatalf("CheckOllama(%q) ok = %v, want %v to match OllamaConfigured", tt.baseURL, ok, tt.want)
+			}
+
+			// Keeping the row on failure must not have turned a rejected URL into
+			// a request: a URL OllamaConfigured refuses is never dialled at all.
+			attempted := transport.attempted()
+			if !tt.want && len(attempted) != 0 {
+				t.Fatalf("CheckOllama(%q) attempted %v, want no request for a rejected URL", tt.baseURL, attempted)
 			}
 		})
 	}

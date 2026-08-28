@@ -140,8 +140,10 @@ func pendingProviderRow(providerName, label string) provider.StatusRow {
 }
 
 // pendingOllamaRow is the placeholder for a configured local Ollama server
-// before its first reachability probe. It reports unreachable rather than a
-// status it has not verified, and carries no observed_at.
+// before its first reachability probe. It carries no observed_at, which is what
+// tells a reader the probe has not run: the unreachable status is only the
+// safe default to hold until it does, never a claim that the server was
+// contacted and did not answer.
 func pendingOllamaRow() provider.StatusRow {
 	return provider.StatusRow{
 		Provider: "ollama",

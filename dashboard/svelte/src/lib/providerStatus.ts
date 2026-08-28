@@ -1,4 +1,4 @@
-import type { ProviderAvailability, ProviderStatus } from './types';
+import type { ProviderStatus } from './types';
 
 /**
  * How often the Settings page re-reads `/health` while it stays open. The
@@ -7,7 +7,7 @@ import type { ProviderAvailability, ProviderStatus } from './types';
  */
 export const PROVIDER_REFRESH_INTERVAL_MS = 15_000;
 
-export type ProviderBadgeStatus = 'success' | 'warning' | 'error';
+export type ProviderBadgeStatus = 'success' | 'warning' | 'error' | 'pending';
 
 /** One refresh attempt: either the rows the API returned, or a failure. */
 export type ProviderRefreshResult = { ok: true; rows: ProviderStatus[] } | { ok: false };
@@ -17,9 +17,17 @@ export function isProviderPending(row: ProviderStatus): boolean {
   return !row.observed_at;
 }
 
-export function providerBadgeStatus(status: ProviderAvailability): ProviderBadgeStatus {
-  if (status === 'operational') return 'success';
-  if (status === 'degraded') return 'warning';
+/**
+ * providerBadgeStatus picks the badge for a card. It takes the whole row, not
+ * just the status, because a row that has never been probed carries a
+ * placeholder status the server has not verified: colouring that red would
+ * report a failure nobody observed. Such a row gets the neutral pending badge,
+ * matching the "Checking" line under it.
+ */
+export function providerBadgeStatus(row: ProviderStatus): ProviderBadgeStatus {
+  if (isProviderPending(row)) return 'pending';
+  if (row.status === 'operational') return 'success';
+  if (row.status === 'degraded') return 'warning';
   return 'error';
 }
 

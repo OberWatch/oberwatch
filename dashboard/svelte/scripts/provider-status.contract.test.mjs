@@ -57,6 +57,11 @@ test('Settings renders provider cards through the tested helpers', () => {
     /detail\.startsWith\(/,
     'the pending state must come from observed_at, not from matching detail text'
   );
+  assert.match(
+    settings,
+    /providerBadgeStatus\(provider\)/,
+    'the badge must be chosen from the whole row, so a never-probed row is not coloured as a failure'
+  );
 });
 
 test('Settings refreshes provider status on an interval while the page is open and stops when it leaves', () => {
@@ -110,6 +115,26 @@ test('a provider refresh never hides the page or blanks the grid', () => {
     loader,
     /\bproviderRows\s*=\s*\[\]/,
     'retrying the settings load must keep the last known cards instead of blanking the grid'
+  );
+});
+
+test('a refresh is bounded: one read at a time, and none while a full load owns the page', () => {
+  const refresh = functionBody(settings, 'refreshProviderStatus');
+
+  const guard = refresh.match(/if \(([^)]*)\) return;/);
+  assert.ok(guard, 'refreshProviderStatus must guard its entry');
+  for (const condition of ['loading', 'errorMessage', 'refreshInFlight']) {
+    assert.match(
+      guard[1],
+      new RegExp(`\\b${condition}\\b`),
+      `the refresh must stand down on ${condition}`
+    );
+  }
+
+  assert.match(
+    refresh,
+    /refreshInFlight = true;[\s\S]*?finally \{\s*refreshInFlight = false;\s*\}/,
+    'the in-flight flag must be released on every path, or one failure stops the refresh for good'
   );
 });
 

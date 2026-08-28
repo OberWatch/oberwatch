@@ -1,5 +1,17 @@
 <script lang="ts">
-  export type BadgeStatus = 'active' | 'near_limit' | 'killed' | 'success' | 'error' | 'warning';
+  /**
+   * `pending` is for a value that has not been measured yet. It is deliberately
+   * neutral: a badge that has not read anything must not colour itself as a
+   * verdict.
+   */
+  export type BadgeStatus =
+    | 'active'
+    | 'near_limit'
+    | 'killed'
+    | 'success'
+    | 'error'
+    | 'warning'
+    | 'pending';
 
   let { status }: { status: BadgeStatus } = $props();
 
@@ -27,6 +39,10 @@
     warning: {
       label: 'Warning',
       classes: 'bg-warning/15 text-warning border-warning/30'
+    },
+    pending: {
+      label: 'Checking',
+      classes: 'bg-elevated text-text-secondary border-border-default'
     }
   };
 </script>
