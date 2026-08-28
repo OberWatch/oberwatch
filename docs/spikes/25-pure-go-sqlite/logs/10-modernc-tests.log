@@ -1,0 +1,59 @@
+# modernc  CGO_ENABLED=0  go version go1.26.0 linux/amd64
+## harness: go test -run TestSpike -v ./internal/storage/ (writes fixtures)
+=== RUN   TestSpike_LegacySchemaMigration
+=== RUN   TestSpike_LegacySchemaMigration/v1_to_v4
+=== RUN   TestSpike_LegacySchemaMigration/v2_to_v4
+=== RUN   TestSpike_LegacySchemaMigration/v3_to_v4
+--- PASS: TestSpike_LegacySchemaMigration (0.08s)
+    --- PASS: TestSpike_LegacySchemaMigration/v1_to_v4 (0.03s)
+    --- PASS: TestSpike_LegacySchemaMigration/v2_to_v4 (0.02s)
+    --- PASS: TestSpike_LegacySchemaMigration/v3_to_v4 (0.02s)
+=== RUN   TestSpike_WriteFixture
+--- PASS: TestSpike_WriteFixture (0.12s)
+=== RUN   TestSpike_OpenFixture
+    spike_driver_test.go:200: SPIKE_FIXTURE_IN not set
+--- SKIP: TestSpike_OpenFixture (0.00s)
+=== RUN   TestSpike_ConstraintErrorMapping
+    spike_driver_test.go:255: driver=modernc.org/sqlite unique_violation raw_result_code=1555 masked=19 err=constraint failed: UNIQUE constraint failed: settings.key (1555)
+    spike_driver_test.go:266: driver=modernc.org/sqlite missing_table raw_result_code=1 err=SQL logic error: no such table: table_that_does_not_exist (1)
+--- PASS: TestSpike_ConstraintErrorMapping (0.01s)
+=== RUN   TestSpike_PragmasAndShutdown
+    spike_driver_test.go:305: sqlite_version=3.53.3 journal_mode=wal synchronous=1 busy_timeout=5000
+--- PASS: TestSpike_PragmasAndShutdown (0.02s)
+=== RUN   TestSpike_BusyTimeoutAcrossConnections
+    spike_driver_test.go:379: second writer waited 430.520215ms for a 400ms lock hold
+    spike_driver_test.go:396: held lock > busy_timeout: writer error after 4.709148128s: insert cost record: database is locked (5) (SQLITE_BUSY)
+--- PASS: TestSpike_BusyTimeoutAcrossConnections (5.15s)
+=== RUN   TestSpike_ConcurrentReadersAndWriters
+--- PASS: TestSpike_ConcurrentReadersAndWriters (0.23s)
+=== RUN   TestSpike_ContextCancellation
+--- PASS: TestSpike_ContextCancellation (0.04s)
+=== RUN   TestSpike_MemoryFootprint
+    spike_driver_test.go:515: heap_inuse_before=1104KB heap_inuse_after=960KB sys_before=18038KB sys_after=22142KB total_alloc_delta=31005KB
+--- PASS: TestSpike_MemoryFootprint (4.02s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	9.668s
+wall=27.33s user=41.24s sys=4.42s maxrss=743388KB
+exit=0
+
+## existing suite: go test -count=1 -skip TestSpike ./...
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	0.068s
+ok  	github.com/OberWatch/oberwatch/internal/alert	0.009s
+ok  	github.com/OberWatch/oberwatch/internal/api	3.307s
+ok  	github.com/OberWatch/oberwatch/internal/budget	0.139s
+ok  	github.com/OberWatch/oberwatch/internal/config	0.050s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	0.017s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	0.014s
+ok  	github.com/OberWatch/oberwatch/internal/provider	3.013s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	0.157s
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.185s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	0.126s
+wall=5.76s user=18.83s sys=2.29s maxrss=221856KB
+exit=0
+
+## go vet ./...
+exit=0

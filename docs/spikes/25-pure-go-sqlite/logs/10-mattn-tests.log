@@ -1,0 +1,64 @@
+# mattn  CGO_ENABLED=1  go version go1.26.0 linux/amd64
+## harness: go test -run TestSpike -v ./internal/storage/ (writes fixtures)
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c: In function ‘sqlite3ShadowTableName’:
+sqlite3-binding.c:123133:9: warning: assignment discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+123133 |   zTail = strrchr(zName, '_');
+       |         ^
+=== RUN   TestSpike_LegacySchemaMigration
+=== RUN   TestSpike_LegacySchemaMigration/v1_to_v4
+=== RUN   TestSpike_LegacySchemaMigration/v2_to_v4
+=== RUN   TestSpike_LegacySchemaMigration/v3_to_v4
+--- PASS: TestSpike_LegacySchemaMigration (0.07s)
+    --- PASS: TestSpike_LegacySchemaMigration/v1_to_v4 (0.03s)
+    --- PASS: TestSpike_LegacySchemaMigration/v2_to_v4 (0.02s)
+    --- PASS: TestSpike_LegacySchemaMigration/v3_to_v4 (0.02s)
+=== RUN   TestSpike_WriteFixture
+--- PASS: TestSpike_WriteFixture (0.08s)
+=== RUN   TestSpike_OpenFixture
+    spike_driver_test.go:200: SPIKE_FIXTURE_IN not set
+--- SKIP: TestSpike_OpenFixture (0.00s)
+=== RUN   TestSpike_ConstraintErrorMapping
+    spike_driver_test.go:255: driver=mattn/go-sqlite3 unique_violation raw_result_code=1555 masked=19 err=UNIQUE constraint failed: settings.key
+    spike_driver_test.go:266: driver=mattn/go-sqlite3 missing_table raw_result_code=1 err=no such table: table_that_does_not_exist
+--- PASS: TestSpike_ConstraintErrorMapping (0.02s)
+=== RUN   TestSpike_PragmasAndShutdown
+    spike_driver_test.go:305: sqlite_version=3.45.1 journal_mode=wal synchronous=1 busy_timeout=5000
+--- PASS: TestSpike_PragmasAndShutdown (0.02s)
+=== RUN   TestSpike_BusyTimeoutAcrossConnections
+    spike_driver_test.go:379: second writer waited 429.898487ms for a 400ms lock hold
+    spike_driver_test.go:396: held lock > busy_timeout: writer error after 5.019340478s: insert cost record: database is locked
+--- PASS: TestSpike_BusyTimeoutAcrossConnections (5.46s)
+=== RUN   TestSpike_ConcurrentReadersAndWriters
+--- PASS: TestSpike_ConcurrentReadersAndWriters (0.30s)
+=== RUN   TestSpike_ContextCancellation
+--- PASS: TestSpike_ContextCancellation (0.05s)
+=== RUN   TestSpike_MemoryFootprint
+    spike_driver_test.go:515: heap_inuse_before=1288KB heap_inuse_after=984KB sys_before=18286KB sys_after=22670KB total_alloc_delta=46544KB
+--- PASS: TestSpike_MemoryFootprint (3.56s)
+PASS
+ok  	github.com/OberWatch/oberwatch/internal/storage	9.568s
+wall=56.46s user=50.80s sys=3.26s maxrss=439380KB
+exit=0
+
+## existing suite: go test -count=1 -skip TestSpike ./...
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	0.089s
+ok  	github.com/OberWatch/oberwatch/internal/alert	0.007s
+ok  	github.com/OberWatch/oberwatch/internal/api	3.318s
+ok  	github.com/OberWatch/oberwatch/internal/budget	0.119s
+ok  	github.com/OberWatch/oberwatch/internal/config	0.056s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	0.052s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	0.024s
+ok  	github.com/OberWatch/oberwatch/internal/provider	3.012s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	0.212s
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.153s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	0.165s
+wall=7.31s user=18.39s sys=2.50s maxrss=175088KB
+exit=0
+
+## go vet ./...
+exit=0
