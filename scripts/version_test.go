@@ -257,15 +257,16 @@ func TestEmbeddedDashboardProviderStatusContract(t *testing.T) {
 	}
 
 	contents := bundle.String()
-	for _, want := range []string{
-		"Public service availability only",
-		"t.providers",
-	} {
-		if !strings.Contains(contents, want) {
-			t.Errorf("embedded dashboard bundle is missing %q", want)
-		}
+	if !strings.Contains(contents, "Public service availability only") {
+		t.Error(`embedded dashboard bundle is missing "Public service availability only"`)
 	}
-	if strings.Contains(contents, "Object.entries(e.providers)") {
+	// The accessor's identifier is whatever the minifier assigns to the health
+	// response in a given build, so match any single-letter name rather than
+	// pinning one build's output.
+	if !regexp.MustCompile(`\b[a-zA-Z]\.providers\b`).MatchString(contents) {
+		t.Error("embedded dashboard bundle has no *.providers accessor for the array-based provider API")
+	}
+	if regexp.MustCompile(`Object\.entries\([a-zA-Z]\.providers\)`).MatchString(contents) {
 		t.Error("embedded dashboard bundle still expects the legacy provider object schema")
 	}
 }
