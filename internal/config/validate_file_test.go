@@ -54,6 +54,27 @@ func TestValidateFile_TableDriven(t *testing.T) {
 			wantErrSubs: []string{"parse config", "prot"},
 		},
 		{
+			name:        "relative alert webhook url is rejected",
+			content:     "[alerts]\nwebhook_url = \"alerts.example/hook\"\n",
+			explicit:    true,
+			writeFile:   true,
+			wantErrSubs: []string{"validate config", "alerts.webhook_url", "scheme must be http or https"},
+		},
+		{
+			name:        "non slack host is rejected for the slack webhook",
+			content:     "[alerts]\nslack_webhook_url = \"https://hooks.slack.com.evil.example/services/T/B/X\"\n",
+			explicit:    true,
+			writeFile:   true,
+			wantErrSubs: []string{"validate config", "alerts.slack_webhook_url", "host must be hooks.slack.com"},
+		},
+		{
+			name:       "valid alert destinations are accepted",
+			content:    "[alerts]\nwebhook_url = \"https://alerts.example/hook\"\nslack_webhook_url = \"https://hooks.slack.com/services/T/B/X\"\n",
+			explicit:   true,
+			writeFile:  true,
+			wantSource: SourceFlag,
+		},
+		{
 			name:         "admin token set warns that auth is session based",
 			content:      "[server]\nadmin_token = \"legacy\"\n",
 			explicit:     true,

@@ -351,10 +351,14 @@ expect_eq "upstream hits (killed requests never forwarded)" "$(mock_hits)" "$((M
 expect_eq "budget status" "$(budget_status "$AGENT")" "killed"
 
 echo "==> Phase 3: exactly one runaway_detected and one agent_killed alert"
-# The webhook is delivered synchronously before the 429 is written, but give it
-# a brief bounded grace period anyway.
+# The webhook is delivered off the request path by the alert queue, and the two
+# alerts are queued as independent jobs that workers can deliver in either
+# order, so wait a brief bounded grace period for both to land.
 for _ in $(seq 1 20); do
-  if [ "$(mock_alert_count "$AGENT" agent_killed)" = "1" ]; then break; fi
+  if [ "$(mock_alert_count "$AGENT" runaway_detected)" = "1" ] &&
+    [ "$(mock_alert_count "$AGENT" agent_killed)" = "1" ]; then
+    break
+  fi
   sleep 0.1
 done
 expect_eq "stored runaway_detected" "$(stored_alert_count "$AGENT" runaway_detected)" 1
