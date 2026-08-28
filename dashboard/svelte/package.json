@@ -1,6 +1,6 @@
 {
   "name": "oberwatch-dashboard",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "packageManager": "npm@10.9.4",

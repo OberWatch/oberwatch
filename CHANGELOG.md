@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-28
+
 ### Added
 - Delete an agent: `DELETE /agents/{name}` removes the agent record, its cost records, its alerts and its legacy budget snapshot in one transaction
 - Task budgets are kept when their agent is deleted; only the `last_agent` pointer is cleared, so lifetime task totals and caps still apply
