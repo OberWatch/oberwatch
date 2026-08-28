@@ -1,0 +1,31 @@
+## go test ./internal/storage/... -count=1 -skip TestSpike (mattn, CGO=1)
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.061s
+wall=2.94s user=10.65s sys=2.58s maxrss=154040KB
+exit=0
+
+## go test -race ./internal/storage/... -count=1 -skip TestSpike
+ok  	github.com/OberWatch/oberwatch/internal/storage	1.108s
+wall=2.77s user=2.10s sys=0.49s maxrss=159188KB
+exit=0
+
+## existing suite: go test ./... -count=1 -skip TestSpike
+ok  	github.com/OberWatch/oberwatch/cmd/oberwatch	0.113s
+ok  	github.com/OberWatch/oberwatch/internal/alert	0.016s
+ok  	github.com/OberWatch/oberwatch/internal/api	3.102s
+ok  	github.com/OberWatch/oberwatch/internal/budget	0.121s
+ok  	github.com/OberWatch/oberwatch/internal/config	0.083s
+ok  	github.com/OberWatch/oberwatch/internal/dashboard	0.052s
+?   	github.com/OberWatch/oberwatch/internal/eval	[no test files]
+ok  	github.com/OberWatch/oberwatch/internal/pricing	0.021s
+ok  	github.com/OberWatch/oberwatch/internal/provider	3.021s
+ok  	github.com/OberWatch/oberwatch/internal/proxy	0.164s
+ok  	github.com/OberWatch/oberwatch/internal/storage	0.124s
+?   	github.com/OberWatch/oberwatch/internal/trace	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/client	[no test files]
+?   	github.com/OberWatch/oberwatch/pkg/types	[no test files]
+ok  	github.com/OberWatch/oberwatch/scripts	0.221s
+wall=6.27s user=18.14s sys=2.35s maxrss=174620KB
+exit=0
+
+## go vet ./...
+exit=0

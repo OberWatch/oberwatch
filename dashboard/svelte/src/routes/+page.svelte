@@ -139,6 +139,7 @@
         eventName === 'cost_update' ||
         eventName === 'budget_alert' ||
         eventName === 'agent_killed' ||
+        eventName === 'agent_deleted' ||
         eventName === 'emergency_stop'
       ) {
         void loadOverview();

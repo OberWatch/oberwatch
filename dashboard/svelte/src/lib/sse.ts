@@ -14,6 +14,10 @@ export function connectStream(onEvent: (event: string, data: unknown) => void): 
     const message = event as MessageEvent;
     onEvent('agent_killed', JSON.parse(message.data));
   });
+  source.addEventListener('agent_deleted', (event) => {
+    const message = event as MessageEvent;
+    onEvent('agent_deleted', JSON.parse(message.data));
+  });
   source.addEventListener('emergency_stop', (event) => {
     const message = event as MessageEvent;
     onEvent('emergency_stop', JSON.parse(message.data));

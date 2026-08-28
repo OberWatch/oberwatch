@@ -1,0 +1,177 @@
+########## mattn
+## go.mod require block
+require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.22
+	github.com/spf13/cobra v1.10.2
+	golang.org/x/crypto v0.45.0
+)
+require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+)
+## module count (go list -m all): 15
+## sqlite-related modules:
+github.com/mattn/go-sqlite3 v1.14.22
+## govulncheck ./...
+### findings (id / module / fixed in)
+Vulnerability #1: GO-2026-6218	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.6
+Vulnerability #2: GO-2026-6090	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.6
+Vulnerability #3: GO-2026-6089	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #4: GO-2026-5972	Standard library	Found in: encoding/asn1@go1.26	Fixed in: encoding/asn1@go1.26.6
+Vulnerability #5: GO-2026-5856	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.5
+Vulnerability #6: GO-2026-5039	Standard library	Found in: net/textproto@go1.26	Fixed in: net/textproto@go1.26.4
+Vulnerability #7: GO-2026-5037	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.4
+Vulnerability #8: GO-2026-5026	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #9: GO-2026-4976	Standard library	Found in: net/http/httputil@go1.26	Fixed in: net/http/httputil@go1.26.3
+Vulnerability #10: GO-2026-4971	Standard library	Found in: net@go1.26	Fixed in: net@go1.26.3
+Vulnerability #11: GO-2026-4947	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #12: GO-2026-4946	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #13: GO-2026-4918	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.3
+Vulnerability #14: GO-2026-4870	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.2
+Vulnerability #15: GO-2026-4866	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #16: GO-2026-4602	Standard library	Found in: os@go1.26	Fixed in: os@go1.26.1
+Vulnerability #17: GO-2026-4601	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.1
+Vulnerability #18: GO-2026-4600	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+Vulnerability #19: GO-2026-4599	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+### summary
+Your code is affected by 19 vulnerabilities from the Go standard library.
+This scan also found 5 vulnerabilities in packages you import and 23
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+### attributable to the sqlite driver tree:
+none
+## licenses reachable from internal/storage:
+github.com/mattn/go-sqlite3,https://github.com/mattn/go-sqlite3/blob/v1.14.22/LICENSE,MIT
+
+########## modernc
+## go.mod require block
+require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/spf13/cobra v1.10.2
+	golang.org/x/crypto v0.45.0
+	modernc.org/sqlite v1.57.0
+)
+require (
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	modernc.org/libc v1.74.4 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
+)
+## module count (go list -m all): 38
+## sqlite-related modules:
+github.com/ncruces/go-strftime v1.0.0
+modernc.org/cc/v4 v4.29.1
+modernc.org/ccgo/v4 v4.34.6
+modernc.org/fileutil v1.4.0
+modernc.org/gc/v2 v2.6.5
+modernc.org/gc/v3 v3.1.4
+modernc.org/goabi0 v0.2.0
+modernc.org/libc v1.74.4
+modernc.org/mathutil v1.7.1
+modernc.org/memory v1.11.0
+modernc.org/opt v0.2.0
+modernc.org/sortutil v1.2.1
+modernc.org/sqlite v1.57.0
+modernc.org/strutil v1.2.1
+modernc.org/token v1.1.0
+## govulncheck ./...
+### findings (id / module / fixed in)
+Vulnerability #1: GO-2026-6218	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.6
+Vulnerability #2: GO-2026-6090	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.6
+Vulnerability #3: GO-2026-6089	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #4: GO-2026-5972	Standard library	Found in: encoding/asn1@go1.26	Fixed in: encoding/asn1@go1.26.6
+Vulnerability #5: GO-2026-5856	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.5
+Vulnerability #6: GO-2026-5039	Standard library	Found in: net/textproto@go1.26	Fixed in: net/textproto@go1.26.4
+Vulnerability #7: GO-2026-5037	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.4
+Vulnerability #8: GO-2026-5026	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #9: GO-2026-4976	Standard library	Found in: net/http/httputil@go1.26	Fixed in: net/http/httputil@go1.26.3
+Vulnerability #10: GO-2026-4971	Standard library	Found in: net@go1.26	Fixed in: net@go1.26.3
+Vulnerability #11: GO-2026-4947	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #12: GO-2026-4946	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #13: GO-2026-4918	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.3
+Vulnerability #14: GO-2026-4870	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.2
+Vulnerability #15: GO-2026-4866	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #16: GO-2026-4602	Standard library	Found in: os@go1.26	Fixed in: os@go1.26.1
+Vulnerability #17: GO-2026-4601	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.1
+Vulnerability #18: GO-2026-4600	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+Vulnerability #19: GO-2026-4599	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+### summary
+Your code is affected by 19 vulnerabilities from the Go standard library.
+This scan also found 5 vulnerabilities in packages you import and 23
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+### attributable to the sqlite driver tree:
+none
+## licenses reachable from internal/storage:
+modernc.org/libc,https://gitlab.com/cznic/libc/blob/v1.74.4/LICENSE-3RD-PARTY.md,MIT
+modernc.org/mathutil,Unknown,Unknown
+modernc.org/memory,https://gitlab.com/cznic/memory/blob/v1.11.0/LICENSE-GO,BSD-3-Clause
+modernc.org/sqlite,https://gitlab.com/cznic/sqlite/blob/v1.57.0/LICENSE,BSD-3-Clause
+
+########## ncruces
+## go.mod require block
+require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/ncruces/go-sqlite3 v0.35.3
+	github.com/spf13/cobra v1.10.2
+	golang.org/x/crypto v0.54.0
+)
+require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+)
+## module count (go list -m all): 26
+## sqlite-related modules:
+github.com/ncruces/go-sqlite3 v0.35.3
+github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304
+github.com/ncruces/julianday v1.0.0
+github.com/ncruces/sort v1.0.0
+github.com/ncruces/wasm2go v0.4.11
+github.com/ncruces/wbt v1.0.0
+## govulncheck ./...
+### findings (id / module / fixed in)
+Vulnerability #1: GO-2026-6218	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.6
+Vulnerability #2: GO-2026-6090	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.6
+Vulnerability #3: GO-2026-6089	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #4: GO-2026-5972	Standard library	Found in: encoding/asn1@go1.26	Fixed in: encoding/asn1@go1.26.6
+Vulnerability #5: GO-2026-5856	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.5
+Vulnerability #6: GO-2026-5039	Standard library	Found in: net/textproto@go1.26	Fixed in: net/textproto@go1.26.4
+Vulnerability #7: GO-2026-5037	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.4
+Vulnerability #8: GO-2026-5026	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.6
+Vulnerability #9: GO-2026-4976	Standard library	Found in: net/http/httputil@go1.26	Fixed in: net/http/httputil@go1.26.3
+Vulnerability #10: GO-2026-4971	Standard library	Found in: net@go1.26	Fixed in: net@go1.26.3
+Vulnerability #11: GO-2026-4947	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #12: GO-2026-4946	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #13: GO-2026-4918	Standard library	Found in: net/http@go1.26	Fixed in: net/http@go1.26.3
+Vulnerability #14: GO-2026-4870	Standard library	Found in: crypto/tls@go1.26	Fixed in: crypto/tls@go1.26.2
+Vulnerability #15: GO-2026-4866	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.2
+Vulnerability #16: GO-2026-4602	Standard library	Found in: os@go1.26	Fixed in: os@go1.26.1
+Vulnerability #17: GO-2026-4601	Standard library	Found in: net/url@go1.26	Fixed in: net/url@go1.26.1
+Vulnerability #18: GO-2026-4600	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+Vulnerability #19: GO-2026-4599	Standard library	Found in: crypto/x509@go1.26	Fixed in: crypto/x509@go1.26.1
+### summary
+Your code is affected by 19 vulnerabilities from the Go standard library.
+This scan also found 5 vulnerabilities in packages you import and 10
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+### attributable to the sqlite driver tree:
+none
+## licenses reachable from internal/storage:
+github.com/ncruces/go-sqlite3,https://github.com/ncruces/go-sqlite3/blob/v0.35.3/LICENSE,MIT
+github.com/ncruces/go-sqlite3-wasm/v3,Unknown,Unknown
+github.com/ncruces/julianday,https://github.com/ncruces/julianday/blob/v1.0.0/LICENSE,MIT
+

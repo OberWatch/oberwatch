@@ -739,6 +739,70 @@ func (s *SQLiteStore) RenameAgent(ctx context.Context, oldName string, newName s
 	return nil
 }
 
+// DeleteAgent removes one agent and every row that belongs only to it.
+//
+// The agent row, its cost records, its alerts, and its legacy budget snapshot
+// are deleted in one transaction. Task budgets are shared across agents and
+// are kept; a task that last ran under this agent has its last_agent cleared.
+// Settings and every other agent are untouched. It returns ErrAgentNotFound
+// when no agent row exists, so a second concurrent delete loses cleanly.
+func (s *SQLiteStore) DeleteAgent(ctx context.Context, name string) (AgentDeletion, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return AgentDeletion{}, fmt.Errorf("agent name must not be empty")
+	}
+	result := AgentDeletion{Agent: name}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentDeletion{}, fmt.Errorf("begin delete agent transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	deleted, err := execRowsAffected(ctx, tx, "DELETE FROM agents WHERE name = ?", name)
+	if err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete agent %q: %w", name, err)
+	}
+	if deleted == 0 {
+		err = ErrAgentNotFound
+		return AgentDeletion{}, err
+	}
+
+	if result.CostRecords, err = execRowsAffected(ctx, tx, "DELETE FROM cost_records WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete cost records for agent %q: %w", name, err)
+	}
+	if result.Alerts, err = execRowsAffected(ctx, tx, "DELETE FROM alerts WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete alerts for agent %q: %w", name, err)
+	}
+	if result.BudgetSnapshots, err = execRowsAffected(ctx, tx, "DELETE FROM budget_snapshots WHERE agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("delete budget snapshot for agent %q: %w", name, err)
+	}
+	if result.TasksDetached, err = execRowsAffected(ctx, tx, "UPDATE task_budgets SET last_agent = '' WHERE last_agent = ?", name); err != nil {
+		return AgentDeletion{}, fmt.Errorf("detach tasks from agent %q: %w", name, err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return AgentDeletion{}, fmt.Errorf("commit delete agent transaction: %w", err)
+	}
+	return result, nil
+}
+
+func execRowsAffected(ctx context.Context, tx *sql.Tx, statement string, args ...any) (int64, error) {
+	execResult, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := execResult.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read rows affected: %w", err)
+	}
+	return affected, nil
+}
+
 // SaveBudgetSnapshot persists one agent budget state snapshot.
 func (s *SQLiteStore) SaveBudgetSnapshot(ctx context.Context, snapshot BudgetSnapshot) error {
 	if strings.TrimSpace(snapshot.Agent) == "" {
