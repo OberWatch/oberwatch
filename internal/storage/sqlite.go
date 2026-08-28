@@ -14,8 +14,10 @@ import (
 
 	"github.com/OberWatch/oberwatch/internal/alert"
 	"github.com/OberWatch/oberwatch/internal/config"
-	// Register SQLite driver with database/sql.
-	sqlite3 "github.com/mattn/go-sqlite3"
+	// Registers the "sqlite" driver with database/sql and supplies the error
+	// type isSQLiteConstraint inspects, so it is a named rather than a blank
+	// import.
+	sqlite "modernc.org/sqlite"
 )
 
 const currentSchemaVersion = 4
@@ -38,7 +40,7 @@ func NewSQLiteStore(dsn string, retention time.Duration, logger *slog.Logger) (*
 		dsn = "oberwatch.db"
 	}
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -1207,9 +1209,18 @@ func splitCSVFloat64s(raw string) []float64 {
 	return result
 }
 
+// sqliteConstraint is the primary result code SQLITE_CONSTRAINT.
+const sqliteConstraint = 19
+
+// isSQLiteConstraint reports whether err is a constraint violation. The driver
+// returns the extended result code, so a primary key violation arrives as 1555
+// (SQLITE_CONSTRAINT_PRIMARYKEY) and a unique violation as 2067
+// (SQLITE_CONSTRAINT_UNIQUE). Both mask to 19, so mask the low byte instead of
+// matching a single extended code. The error is a pointer type; matching a
+// value type here would never match and would fail open.
 func isSQLiteConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrConstraint
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteConstraint
 }
 
 func boolToInt(value bool) int {

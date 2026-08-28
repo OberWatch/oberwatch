@@ -45,6 +45,9 @@ require_literal 'Docker run test polls the unauthenticated health endpoint' scri
 require_literal 'Docker run test bounds each HTTP request' scripts/test-docker-run.sh '--max-time'
 require_literal 'Docker run test checks the ok response' scripts/test-docker-run.sh '"status":"ok"'
 require_literal 'Docker run test verifies Docker healthy state' scripts/test-docker-run.sh "'{{.State.Health.Status}}'"
+require_literal 'Docker run test verifies the container runs as non-root' scripts/test-docker-run.sh 'docker exec "$CONTAINER" id -u'
+require_literal 'Docker run test verifies no SQLite shared library is needed' scripts/test-docker-run.sh 'ls /usr/lib/libsqlite3.so*'
+require_literal 'image builds the binary without cgo' Dockerfile 'CGO_ENABLED=0 go build'
 require_literal 'Docker run test creates a private temporary directory' scripts/test-docker-run.sh 'mktemp -d "${TMPDIR:-/tmp}/oberwatch-docker-health.XXXXXX"'
 require_literal 'Docker run test keeps curl output in its private temporary directory' scripts/test-docker-run.sh 'RESPONSE_FILE=$TEMP_DIR/response'
 require_literal 'Docker run test safely removes its private temporary directory' scripts/test-docker-run.sh 'rm -rf "$TEMP_DIR"'

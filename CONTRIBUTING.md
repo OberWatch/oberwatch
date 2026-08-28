@@ -130,7 +130,7 @@ test: add table-driven tests for cost calculation
 Do not add new dependencies without explicit approval. Approved dependencies:
 
 - `github.com/BurntSushi/toml` — TOML config parsing
-- `github.com/mattn/go-sqlite3` — SQLite driver
+- `modernc.org/sqlite` — SQLite driver (pure Go, so builds need no cgo)
 - `github.com/spf13/cobra` — CLI framework
 
 No HTTP frameworks, ORMs, or assertion libraries.

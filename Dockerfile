@@ -1,6 +1,6 @@
 # Build stage
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache gcc musl-dev git make nodejs npm
+RUN apk add --no-cache git make nodejs npm
 
 WORKDIR /app
 ARG CHANNEL=dev
@@ -16,11 +16,12 @@ RUN cd dashboard/svelte && npm ci && npm run build
 COPY . .
 RUN cp -R dashboard/svelte/build/. internal/dashboard/static/ && \
     cp -R dashboard/svelte/static/. internal/dashboard/static/
-RUN CGO_ENABLED=1 go build -ldflags="-s -w -X main.channel=${CHANNEL} -X main.commit=${COMMIT}" -o oberwatch ./cmd/oberwatch
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.channel=${CHANNEL} -X main.commit=${COMMIT}" -o oberwatch ./cmd/oberwatch
 
-# Runtime stage
+# Runtime stage. The binary is statically linked, so no SQLite shared library
+# is needed here.
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates sqlite-libs && \
+RUN apk add --no-cache ca-certificates && \
     addgroup -S oberwatch && adduser -S oberwatch -G oberwatch && \
     mkdir -p /data && chown oberwatch:oberwatch /data
 COPY --from=builder /app/oberwatch /usr/local/bin/oberwatch

@@ -131,7 +131,7 @@ func TestCalculateCost(t *testing.T) {
 - Minimize external dependencies. Prefer the standard library.
 - Approved dependencies:
   - `github.com/BurntSushi/toml` — TOML config parsing
-  - `github.com/mattn/go-sqlite3` — SQLite driver
+  - `modernc.org/sqlite` — SQLite driver (pure Go, so builds need no cgo)
   - `github.com/spf13/cobra` — CLI framework
   - No HTTP framework (use `net/http` standard library)
   - No ORM (write SQL directly)
