@@ -1,4 +1,13 @@
-export type ProviderAvailability = 'operational' | 'degraded' | 'outage' | 'status_unavailable';
+/**
+ * `status_unavailable` means a public status feed could not be read.
+ * `unreachable` means a configured local server did not answer its probe.
+ */
+export type ProviderAvailability =
+  | 'operational'
+  | 'degraded'
+  | 'outage'
+  | 'status_unavailable'
+  | 'unreachable';
 
 export interface ProviderStatus {
   provider: string;
@@ -6,6 +15,8 @@ export interface ProviderStatus {
   status: ProviderAvailability;
   public: boolean;
   detail: string;
+  /** RFC3339 time of the probe this row reflects. Absent until the first probe finishes. */
+  observed_at?: string;
 }
 
 export interface HealthResponse {

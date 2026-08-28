@@ -157,8 +157,11 @@ func TestChecker_CheckOllama_RedirectCannotReachRemote(t *testing.T) {
 	checker := &Checker{ollamaTransport: transport}
 
 	row, ok := checker.CheckOllama(context.Background(), server.URL)
-	if ok {
-		t.Fatalf("ok = true, want false when the local server redirects, got row %+v", row)
+	if !ok {
+		t.Fatal("ok = false, want true: a configured loopback server keeps its row even when it misbehaves")
+	}
+	if row.Status != StatusUnreachable {
+		t.Fatalf("Status = %q, want %q when the local server redirects instead of answering", row.Status, StatusUnreachable)
 	}
 
 	attempted := transport.attempted()
@@ -187,8 +190,12 @@ func TestChecker_CheckOllama_RedirectToLoopbackIsAlsoNotFollowed(t *testing.T) {
 	transport := &recordingTransport{next: redirector.Client().Transport}
 	checker := &Checker{ollamaTransport: transport}
 
-	if _, ok := checker.CheckOllama(context.Background(), redirector.URL); ok {
-		t.Fatal("ok = true, want false: provider status probes must not follow redirects")
+	row, ok := checker.CheckOllama(context.Background(), redirector.URL)
+	if !ok {
+		t.Fatal("ok = false, want true: the configured server keeps its row")
+	}
+	if row.Status == StatusOperational {
+		t.Fatal("Status = operational after a redirect, want unreachable: provider status probes must not follow redirects")
 	}
 	if attempted := transport.attempted(); len(attempted) != 1 {
 		t.Fatalf("attempted %v, want exactly one request", attempted)
