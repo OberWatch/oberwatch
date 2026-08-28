@@ -12,9 +12,9 @@
  */
 import { compile } from 'svelte/compiler';
 import { render as renderServer } from 'svelte/server';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const srcRoot = resolve(projectRoot, 'src');
@@ -38,6 +38,20 @@ function resolveLocalSpecifier(specifier, importerDir) {
   return null;
 }
 
+/**
+ * moduleFileFor resolves a plain (non-component) local import to a real file.
+ * Components use bundler-style extensionless specifiers, so the extension is
+ * added back here.
+ */
+function moduleFileFor(target, specifier, componentPath) {
+  const candidates = extname(target) === '' ? [`${target}.ts`, `${target}.js`] : [target];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found === undefined) {
+    throw new Error(`render-svelte cannot resolve '${specifier}' from ${componentPath}`);
+  }
+  return found;
+}
+
 function compileComponent(componentPath) {
   const cached = compiledByPath.get(componentPath);
   if (cached) {
@@ -56,12 +70,13 @@ function compileComponent(componentPath) {
     if (target === null) {
       return match;
     }
-    if (!target.endsWith('.svelte')) {
-      throw new Error(
-        `render-svelte can only follow .svelte imports, got '${specifier}' from ${componentPath}`
-      );
+    if (target.endsWith('.svelte')) {
+      return `from './${basename(compileComponent(target))}'`;
     }
-    return `from './${basename(compileComponent(target))}'`;
+    // Plain helper modules are imported where they live, by absolute URL: the
+    // compiled component sits in a different directory, so a relative
+    // specifier would not resolve. Node strips the types on import.
+    return `from '${pathToFileURL(moduleFileFor(target, specifier, componentPath)).href}'`;
   });
 
   mkdirSync(outRoot, { recursive: true });

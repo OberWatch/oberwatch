@@ -1,10 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchJSON } from '$lib/api';
+  import {
+    agentDeleteClosesDialog,
+    agentDeleteErrorOutcome,
+    agentDeleteOutcome,
+    deleteAgentPath
+  } from '$lib/agentDelete';
   import { formatUSD } from '$lib/currency';
-  import { AgentEditPanel, BudgetBar, DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
+  import { AgentDeleteDialog, AgentEditPanel, BudgetBar, DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
   import { loadPhase } from '$lib/loadState';
-  import type { Budget, BudgetUpdateRequest, BudgetsResponse, Agent, AgentsResponse } from '$lib/types';
+  import type { AgentDeleteOutcome } from '$lib/agentDelete';
+  import type { Budget, BudgetUpdateRequest, BudgetsResponse, Agent, AgentDeleteResponse, AgentsResponse } from '$lib/types';
   import type { Snippet } from 'svelte';
 
   type BadgeStatus = 'active' | 'near_limit' | 'killed' | 'success' | 'error' | 'warning';
@@ -54,6 +61,9 @@
   let editOpen = $state(false);
   let editBusy = $state(false);
   let editError = $state<string | null>(null);
+  let deleteTarget = $state<string | null>(null);
+  let deleteBusy = $state(false);
+  let deleteError = $state<string | null>(null);
 
   const phase = $derived(loadPhase({ loading, errorMessage, hasData: rows.length > 0 }));
 
@@ -213,6 +223,48 @@
     }
   }
 
+  function openDeleteDialog(agentName: string): void {
+    deleteError = null;
+    deleteTarget = agentName;
+  }
+
+  function closeDeleteDialog(): void {
+    if (deleteBusy) {
+      return;
+    }
+    deleteTarget = null;
+    deleteError = null;
+  }
+
+  async function deleteAgent(agentName: string): Promise<void> {
+    deleteBusy = true;
+    deleteError = null;
+    successMessage = null;
+
+    let outcome: AgentDeleteOutcome;
+    try {
+      const result = await fetchJSON<AgentDeleteResponse>(deleteAgentPath(agentName), {
+        method: 'DELETE'
+      });
+      outcome = agentDeleteOutcome(agentName, result);
+    } catch (err) {
+      outcome = agentDeleteErrorOutcome(agentName, err);
+    } finally {
+      deleteBusy = false;
+    }
+
+    if (!agentDeleteClosesDialog(outcome)) {
+      deleteError = outcome.message;
+      return;
+    }
+
+    // Both terminal outcomes leave the agent gone, so the list is refetched
+    // either way rather than being patched from the response.
+    successMessage = outcome.message;
+    deleteTarget = null;
+    await loadAgents();
+  }
+
   onMount(() => {
     proxyURL = window.location.origin;
     void loadAgents();
@@ -306,6 +358,15 @@
     >
       Reset
     </button>
+    <button
+      type="button"
+      class="rounded-md border border-danger/50 bg-elevated px-2.5 py-1 text-xs font-medium text-danger disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={isBusy(row.name) || deleteBusy}
+      aria-label={`Delete agent ${row.name}`}
+      onclick={() => openDeleteDialog(row.name)}
+    >
+      Delete
+    </button>
   </div>
 {/snippet}
 
@@ -388,4 +449,13 @@ curl <span class="text-danger">{proxyURL}</span><span class="text-accent">/v1/ch
     editError = null;
   }}
   onSave={saveAgentEdit}
+/>
+
+<AgentDeleteDialog
+  open={deleteTarget !== null}
+  agentName={deleteTarget}
+  busy={deleteBusy}
+  errorMessage={deleteError}
+  onClose={closeDeleteDialog}
+  onConfirm={deleteAgent}
 />

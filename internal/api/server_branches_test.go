@@ -404,7 +404,8 @@ func (f testDispatcher) Dispatch(ctx context.Context, entry alert.Alert) {
 }
 
 type failingStore struct {
-	queryCostsErr error
+	queryCostsErr  error
+	deleteAgentErr error
 }
 
 func (f failingStore) SaveCostRecord(context.Context, storage.CostRecord) error {
@@ -437,6 +438,10 @@ func (f failingStore) ListAgents(context.Context) ([]storage.AgentRecord, error)
 
 func (f failingStore) RenameAgent(context.Context, string, string) error {
 	return nil
+}
+
+func (f failingStore) DeleteAgent(context.Context, string) (storage.AgentDeletion, error) {
+	return storage.AgentDeletion{}, f.deleteAgentErr
 }
 
 func (f failingStore) SaveBudgetSnapshot(context.Context, storage.BudgetSnapshot) error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,11 @@ import (
 )
 
 const unknownAgent = "unknown"
+
+// ErrAgentProtected indicates the agent is declared in the gate configuration
+// and would be recreated from that configuration on the next start, so
+// deleting it through the API would not stick.
+var ErrAgentProtected = errors.New("agent is defined in configuration")
 
 const (
 	disableReasonNone           = ""
@@ -167,9 +173,18 @@ type BudgetManager struct {
 	runaway              config.RunawayConfig
 	emergency            bool
 	knownAgents          map[string]struct{}
+	configuredAgents     map[string]struct{}
 	flushInterval        time.Duration
 	flushStop            chan struct{}
 	flushWG              sync.WaitGroup
+
+	// flushMu makes DeleteAgent exclusive against every store flush. A flush
+	// snapshots its dirty records under mu but writes them after releasing it,
+	// so a delete landing in that window would otherwise be undone by the
+	// write that follows. Flushes hold it for reading, so they never block each
+	// other and the request path pays only an uncontended read lock. mu is
+	// acquired only while already holding this, never the other way round.
+	flushMu sync.RWMutex
 
 	globalLimitUSD float64
 	globalPeriod   config.BudgetPeriod
@@ -308,6 +323,7 @@ func newManager(
 		identificationMethod: gate.Identification.Method,
 		apiKeyMap:            append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
 		knownAgents:          make(map[string]struct{}),
+		configuredAgents:     make(map[string]struct{}, len(gate.Agents)),
 		runaway:              gate.Runaway,
 		defaultState: agentPolicy{
 			period:                gate.DefaultBudget.Period,
@@ -338,6 +354,7 @@ func newManager(
 		}
 		normalized := normalizeAgent(entry.Name)
 		manager.agentPolicy[normalized] = policy
+		manager.configuredAgents[normalized] = struct{}{}
 		if entry.TaskBudgetUSD > 0 {
 			manager.agentTaskLimit[normalized] = entry.TaskBudgetUSD
 		}
@@ -1048,6 +1065,9 @@ func (m *BudgetManager) Flush(ctx context.Context) error {
 		return nil
 	}
 
+	m.flushMu.RLock()
+	defer m.flushMu.RUnlock()
+
 	records := m.snapshotDirtyAgentRecords()
 	for _, record := range records {
 		if err := m.store.UpsertAgent(ctx, record); err != nil {
@@ -1122,6 +1142,79 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 	}
 
 	return m.Flush(ctx)
+}
+
+// DeleteAgent forgets one agent at runtime and removes its persisted rows.
+//
+// Agents declared in the gate configuration return ErrAgentProtected because
+// the next start would seed them again. An agent that is neither tracked in
+// memory nor persisted returns storage.ErrAgentNotFound, which is also what the
+// loser of two concurrent deletes sees.
+//
+// Two locks are held, in this order. flushMu excludes a concurrent Flush,
+// whose store writes happen outside mu and would otherwise put the deleted
+// rows back. mu covers the store delete so the runtime and persisted views
+// change together: a proxied request arriving in the same instant either sees
+// the agent before the delete or rediscovers it afterwards, never a half state.
+func (m *BudgetManager) DeleteAgent(ctx context.Context, agent string) (storage.AgentDeletion, error) {
+	if strings.TrimSpace(agent) == "" {
+		return storage.AgentDeletion{}, storage.ErrAgentNotFound
+	}
+	normalized := normalizeAgent(agent)
+
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
+
+	m.mu.Lock()
+	if _, configured := m.configuredAgents[normalized]; configured {
+		m.mu.Unlock()
+		return storage.AgentDeletion{}, ErrAgentProtected
+	}
+
+	_, tracked := m.knownAgents[normalized]
+	if _, ok := m.state[normalized]; ok {
+		tracked = true
+	}
+	if _, ok := m.agentPolicy[normalized]; ok {
+		tracked = true
+	}
+
+	deletion := storage.AgentDeletion{Agent: normalized}
+	if m.store != nil {
+		stored, err := m.store.DeleteAgent(ctx, normalized)
+		switch {
+		case err == nil:
+			deletion = stored
+		case errors.Is(err, storage.ErrAgentNotFound) && tracked:
+			// Discovered but not flushed yet: there is nothing persisted to remove.
+		default:
+			m.mu.Unlock()
+			return storage.AgentDeletion{}, err
+		}
+	} else if !tracked {
+		m.mu.Unlock()
+		return storage.AgentDeletion{}, storage.ErrAgentNotFound
+	}
+
+	delete(m.agentPolicy, normalized)
+	delete(m.state, normalized)
+	delete(m.knownAgents, normalized)
+	delete(m.agentTaskLimit, normalized)
+	for _, task := range m.tasks {
+		if task.lastAgent != normalized {
+			continue
+		}
+		task.lastAgent = ""
+		task.dirty = true
+	}
+	m.mu.Unlock()
+
+	// Still under flushMu, so the detached task rows cannot be overwritten by a
+	// flush that snapshotted them before the delete.
+	if err := m.flushTasks(ctx); err != nil {
+		return deletion, fmt.Errorf("flush detached tasks after deleting agent %q: %w", normalized, err)
+	}
+	return deletion, nil
 }
 
 func (m *BudgetManager) flushAgentIfNeeded(agent string) {

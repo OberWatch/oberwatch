@@ -944,7 +944,16 @@ func (s *Server) handleAgentByName(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "config_error", "agent not found", "", 0, 0)
 		return
 	}
-	if action != "rename" {
+	switch action {
+	case "":
+		if r.Method != http.MethodDelete {
+			writeMethodNotAllowed(w)
+			return
+		}
+		s.handleAgentDelete(w, r, agent)
+		return
+	case "rename":
+	default:
 		writeError(w, http.StatusNotFound, "config_error", "unknown agent action", agent, 0, 0)
 		return
 	}
@@ -987,6 +996,51 @@ func (s *Server) handleAgentByName(w http.ResponseWriter, r *http.Request) {
 		"status":   "ok",
 		"old_name": agent,
 		"new_name": newName,
+	})
+}
+
+// handleAgentDelete serves DELETE /agents/{name}.
+//
+// It removes the agent's runtime state and its persisted rows (agent record,
+// cost records, alerts, budget snapshot) and clears the agent pointer on
+// shared task budgets. Settings, pricing, the global budget, and other agents
+// are untouched. The next proxied request for the same name rediscovers the
+// agent with a fresh default budget.
+func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request, agent string) {
+	if !validAgentName(agent) {
+		writeError(w, http.StatusBadRequest, "config_error", "agent name must contain only letters, numbers, hyphens, or underscores", "", 0, 0)
+		return
+	}
+	if s.budget == nil || s.store == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "budget manager or storage is not configured", agent, 0, 0)
+		return
+	}
+
+	deletion, err := s.budget.DeleteAgent(r.Context(), agent)
+	if err != nil {
+		switch {
+		case errors.Is(err, budget.ErrAgentProtected):
+			writeError(w, http.StatusConflict, "agent_protected", "agent is defined in the configuration file and cannot be deleted from the dashboard; remove it from the config instead", agent, 0, 0)
+		case errors.Is(err, storage.ErrAgentNotFound):
+			writeError(w, http.StatusNotFound, "agent_not_found", "agent not found", agent, 0, 0)
+		default:
+			writeError(w, http.StatusInternalServerError, "config_error", err.Error(), agent, 0, 0)
+		}
+		return
+	}
+
+	s.publish("agent_deleted", map[string]any{"agent": deletion.Agent})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "deleted",
+		"agent":  deletion.Agent,
+		"removed": map[string]any{
+			"agent_record":     1,
+			"cost_records":     deletion.CostRecords,
+			"alerts":           deletion.Alerts,
+			"budget_snapshots": deletion.BudgetSnapshots,
+			"tasks_detached":   deletion.TasksDetached,
+		},
+		"recreated_on_next_request": true,
 	})
 }
 
