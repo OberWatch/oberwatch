@@ -31,7 +31,8 @@ test('npm test runs the skeleton render, dashboard states and reduced motion sui
   for (const file of [
     'scripts/skeleton.render.test.mjs',
     'scripts/dashboard-states.contract.test.mjs',
-    'scripts/reduced-motion.css.test.mjs'
+    'scripts/reduced-motion.css.test.mjs',
+    'scripts/provider-status.contract.test.mjs'
   ]) {
     assert.match(
       resolved,

@@ -26,6 +26,11 @@ const (
 	StatusDegraded    Status = "degraded"
 	StatusOutage      Status = "outage"
 	StatusUnavailable Status = "status_unavailable"
+
+	// StatusUnreachable is reported for a configured local server that did not
+	// answer its credential-free reachability probe. It is distinct from
+	// StatusUnavailable, which means a public status feed could not be read.
+	StatusUnreachable Status = "unreachable"
 )
 
 // ProbeTimeout bounds every network call a Checker makes.
@@ -42,7 +47,12 @@ const (
 	openAIDetail    = "Public status feed at status.openai.com. Not a check of your API key or of the inference API."
 	anthropicDetail = "Public status feed at status.anthropic.com. Not a check of your API key or of the inference API."
 	ollamaDetail    = "Local Ollama server on loopback answered an unauthenticated GET /api/tags. Not a public status feed."
+
+	ollamaUnreachableDetail = "Local Ollama server on loopback did not answer an unauthenticated GET /api/tags. Not a public status feed. The row recovers on the next check once Ollama is running."
 )
+
+// OllamaLabel is the label shown on the local Ollama row.
+const OllamaLabel = "Ollama (local)"
 
 var (
 	// errNotLoopback rejects an Ollama base URL, or a resolved address, that is
@@ -144,9 +154,14 @@ func (c *Checker) CheckAnthropic(ctx context.Context) StatusRow {
 // credential-free GET /api/tags. Ollama publishes no status feed, so this is
 // the one probe that talks to a configured address, and it is restricted to
 // loopback: a non-loopback base URL is rejected without any request being
-// made. The second return value is false whenever there is no usable base
-// URL or the server does not answer — callers must omit the row in that case
-// rather than show it as unreachable.
+// made.
+//
+// The second return value reports whether Ollama is configured at all, not
+// whether it answered. It is false only when there is no usable loopback base
+// URL, and callers omit the row in that case. Once configured, the row is
+// always returned: StatusOperational when /api/tags answered 200, and
+// StatusUnreachable when the server did not answer, so a stopped Ollama shows
+// as unreachable instead of disappearing, and comes back on the next probe.
 func (c *Checker) CheckOllama(ctx context.Context, baseURL string) (StatusRow, bool) {
 	parsed, err := validateOllamaBaseURL(baseURL)
 	if err != nil {
@@ -156,29 +171,42 @@ func (c *Checker) CheckOllama(ctx context.Context, baseURL string) (StatusRow, b
 	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 
+	row := StatusRow{
+		Provider: "ollama",
+		Label:    OllamaLabel,
+		Status:   StatusUnreachable,
+		Public:   false,
+		Detail:   ollamaUnreachableDetail,
+	}
+
 	endpoint := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: "/api/tags"}).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return StatusRow{}, false
+		return row, true
 	}
 
 	resp, err := c.ollamaHTTPClient().Do(req)
 	if err != nil {
-		return StatusRow{}, false
+		return row, true
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return StatusRow{}, false
+		return row, true
 	}
 
-	return StatusRow{
-		Provider: "ollama",
-		Label:    "Ollama (local)",
-		Status:   StatusOperational,
-		Public:   false,
-		Detail:   ollamaDetail,
-	}, true
+	row.Status = StatusOperational
+	row.Detail = ollamaDetail
+	return row, true
+}
+
+// OllamaConfigured reports whether baseURL is a usable loopback Ollama base
+// URL, which is the exact condition under which CheckOllama returns a row. It
+// lets callers show a placeholder row for a configured server before the first
+// probe has run, without ever showing one for an unconfigured or rejected URL.
+func OllamaConfigured(baseURL string) bool {
+	_, err := validateOllamaBaseURL(baseURL)
+	return err == nil
 }
 
 // validateOllamaBaseURL accepts only a credential-free http or https URL whose

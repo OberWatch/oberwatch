@@ -172,10 +172,7 @@ func newFreshnessTestServer(checker providerStatusChecker, clock *fakeClock) *Se
 		providerChecker: checker,
 		ollamaBaseURL:   "http://127.0.0.1:11434",
 		now:             clock.Now,
-		providerRows: []provider.StatusRow{
-			pendingProviderRow("openai", "OpenAI"),
-			pendingProviderRow("anthropic", "Anthropic"),
-		},
+		providerRows:    initialProviderRows("http://127.0.0.1:11434"),
 	}
 }
 

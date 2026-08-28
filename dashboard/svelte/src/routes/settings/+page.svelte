@@ -2,8 +2,15 @@
   import { fetchJSON } from '$lib/api';
   import { DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
   import { loadPhase } from '$lib/loadState';
-  import type { HealthResponse, PricingResponse, ProviderAvailability, ProviderStatus } from '$lib/types';
-  import type { Snippet } from 'svelte';
+  import {
+    PROVIDER_REFRESH_INTERVAL_MS,
+    nextProviderRows,
+    providerBadgeStatus,
+    providerObservedAt,
+    providerStatusLabel
+  } from '$lib/providerStatus';
+  import type { HealthResponse, PricingResponse, ProviderStatus } from '$lib/types';
+  import { onMount, type Snippet } from 'svelte';
 
   type RowData = Record<string, string | number | boolean | null | undefined>;
   type ColumnDef = {
@@ -34,12 +41,14 @@
   let uptimeSeconds = $state(0);
   let storageBackend = $state('unknown');
   let providerRows = $state<ProviderStatus[]>([]);
+  let providerRefreshWarning = $state<string | null>(null);
   let pricingRows = $state<PricingRow[]>([]);
   let currentPassword = $state('');
   let newPassword = $state('');
   let confirmPassword = $state('');
 
   const phase = $derived(loadPhase({ loading, errorMessage, hasData: true }));
+  const providerLastChecked = $derived(providerObservedAt(providerRows));
 
   const pricingRenderers = $derived.by<Record<string, Snippet<[RowData]>>>(() => ({
     input_per_million: inputPriceCell,
@@ -65,18 +74,16 @@
     }).format(value);
   }
 
-  function providerBadgeStatus(status: ProviderAvailability): 'success' | 'warning' | 'error' {
-    if (status === 'operational') return 'success';
-    if (status === 'degraded') return 'warning';
-    return 'error';
+  function formatTime(value: Date): string {
+    return new Intl.DateTimeFormat('en-US', { timeStyle: 'medium' }).format(value);
   }
 
-  function providerStatusLabel(row: ProviderStatus): string {
-    if (row.detail.startsWith('Checking')) return 'Checking';
-    if (row.status === 'operational') return 'Operational';
-    if (row.status === 'degraded') return 'Degraded';
-    if (row.status === 'outage') return 'Outage';
-    return 'Status unavailable';
+  function applyHealth(health: HealthResponse): void {
+    version = health.version;
+    uptimeSeconds = health.uptime_seconds;
+    storageBackend = health.storage_backend ?? 'unknown';
+    providerRows = nextProviderRows(providerRows, { ok: true, rows: health.providers });
+    providerRefreshWarning = null;
   }
 
   async function loadSettings(): Promise<void> {
@@ -84,17 +91,9 @@
     errorMessage = null;
     pricingWarning = null;
     pricingRows = [];
-    providerRows = [];
 
     try {
-      const health = await fetchJSON<HealthResponse>('/health');
-
-      version = health.version;
-      uptimeSeconds = health.uptime_seconds;
-      storageBackend = health.storage_backend ?? 'unknown';
-
-      providerRows = health.providers;
-
+      applyHealth(await fetchJSON<HealthResponse>('/health'));
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : 'Failed to load system health.';
       loading = false;
@@ -104,6 +103,35 @@
     loading = false;
     await loadPricing();
   }
+
+  /**
+   * refreshProviderStatus re-reads health while the page stays open, so a
+   * provider that fails or recovers shows up without a reload or a new login.
+   * It never touches the page-wide `loading` flag, and a failed read keeps the
+   * cards that are already on screen rather than blanking the grid.
+   */
+  async function refreshProviderStatus(): Promise<void> {
+    if (loading) return;
+
+    try {
+      applyHealth(await fetchJSON<HealthResponse>('/health'));
+    } catch (err) {
+      providerRows = nextProviderRows(providerRows, { ok: false });
+      providerRefreshWarning =
+        err instanceof Error ? err.message : 'Provider status could not be refreshed.';
+    }
+  }
+
+  onMount(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshProviderStatus();
+    }, PROVIDER_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(timer);
+    };
+  });
 
   /**
    * loadPricing is split out from loadSettings so a pricing failure — and its
@@ -201,9 +229,17 @@
       <h2 class="text-lg font-semibold text-text-primary">Provider Status</h2>
       <p class="mt-1 text-sm text-text-secondary">
         Public service availability only — not a test of API access or credentials.
+        {#if providerLastChecked}
+          Last checked {formatTime(providerLastChecked)}.
+        {/if}
       </p>
-      <div class="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-        {#each providerRows as provider}
+      {#if providerRefreshWarning}
+        <p role="status" class="mt-2 text-xs text-warning">
+          Could not refresh provider status ({providerRefreshWarning}). Showing the last known state.
+        </p>
+      {/if}
+      <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
+        {#each providerRows as provider (provider.provider)}
           <div class="rounded-md border border-border-default bg-elevated px-3 py-2" title={provider.detail}>
             <div class="flex items-center justify-between gap-3">
               <span class="text-sm text-text-primary">{provider.label}</span>

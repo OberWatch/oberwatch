@@ -95,10 +95,7 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 		providerChecker: provider.NewChecker(),
 		ollamaBaseURL:   cfg.Upstream.Ollama.BaseURL,
 		now:             func() time.Time { return time.Now().UTC() },
-		providerRows: []provider.StatusRow{
-			pendingProviderRow("openai", "OpenAI"),
-			pendingProviderRow("anthropic", "Anthropic"),
-		},
+		providerRows:    initialProviderRows(cfg.Upstream.Ollama.BaseURL),
 		broker: &broker{
 			clients: make(map[chan sseEvent]struct{}),
 		},
@@ -112,6 +109,23 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 	return server
 }
 
+// initialProviderRows builds the placeholder rows served before the first
+// probe completes. The set of rows is fixed by configuration, not by probe
+// outcomes: the two public feeds are always present, and the local Ollama row
+// is present exactly when a loopback base URL is configured. The same set is
+// produced by every later refresh, so a card never appears or disappears while
+// a session is open; only its status changes.
+func initialProviderRows(ollamaBaseURL string) []provider.StatusRow {
+	rows := []provider.StatusRow{
+		pendingProviderRow("openai", "OpenAI"),
+		pendingProviderRow("anthropic", "Anthropic"),
+	}
+	if provider.OllamaConfigured(ollamaBaseURL) {
+		rows = append(rows, pendingOllamaRow())
+	}
+	return rows
+}
+
 // pendingProviderRow is the placeholder shown before the first background
 // probe completes. It must never claim a status we have not yet verified, and
 // it carries no observed_at because nothing has been observed yet.
@@ -122,6 +136,19 @@ func pendingProviderRow(providerName, label string) provider.StatusRow {
 		Status:   provider.StatusUnavailable,
 		Public:   true,
 		Detail:   "Waiting for the first public status feed check.",
+	}
+}
+
+// pendingOllamaRow is the placeholder for a configured local Ollama server
+// before its first reachability probe. It reports unreachable rather than a
+// status it has not verified, and carries no observed_at.
+func pendingOllamaRow() provider.StatusRow {
+	return provider.StatusRow{
+		Provider: "ollama",
+		Label:    provider.OllamaLabel,
+		Status:   provider.StatusUnreachable,
+		Public:   false,
+		Detail:   "Waiting for the first local reachability check.",
 	}
 }
 
@@ -165,7 +192,10 @@ func (s *Server) refreshProviderStatus(ctx context.Context) bool {
 	observedAt := s.nowUTC()
 
 	// Fixed row order: the public feeds first, then the local server. Probe
-	// completion order must not reorder the table the user reads.
+	// completion order must not reorder the table the user reads. The public
+	// rows are always present, whatever their status. The Ollama row is present
+	// whenever a loopback base URL is configured (ollamaOK), including when the
+	// server did not answer; it is never present without one.
 	rows := make([]provider.StatusRow, 0, 3)
 	rows = append(rows, stampObservedAt(openAIRow, observedAt), stampObservedAt(anthropicRow, observedAt))
 	if ollamaOK {

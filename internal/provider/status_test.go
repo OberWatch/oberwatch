@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -130,18 +131,159 @@ func TestChecker_CheckOllama_OmittedWhenNoBaseURL(t *testing.T) {
 	}
 }
 
-func TestChecker_CheckOllama_OmittedWhenUnreachable(t *testing.T) {
+// TestChecker_CheckOllama_ConfiguredButNotAnsweringKeepsRow is the regression
+// test for Issue #85. Before the fix a configured Ollama that failed its probe
+// was dropped from the result entirely (ok = false), so its card vanished from
+// the dashboard until a restart. A configured server must always yield a row;
+// only its status changes.
+func TestChecker_CheckOllama_ConfiguredButNotAnsweringKeepsRow(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	unreachableURL := server.URL
-	server.Close()
+	tests := []struct {
+		name       string
+		serve      func(t *testing.T) string
+		wantStatus Status
+	}{
+		{
+			name: "connection refused",
+			serve: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+				closedURL := server.URL
+				server.Close()
+				return closedURL
+			},
+			wantStatus: StatusUnreachable,
+		},
+		{
+			name: "non-200 response",
+			serve: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			wantStatus: StatusUnreachable,
+		},
+		{
+			name: "answers 200",
+			serve: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"models":[]}`))
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			wantStatus: StatusOperational,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			baseURL := tt.serve(t)
+			checker := &Checker{HTTPClient: http.DefaultClient}
+			row, ok := checker.CheckOllama(context.Background(), baseURL)
+
+			if !ok {
+				t.Fatalf("ok = false for configured loopback %q, want true: a configured server must keep its row", baseURL)
+			}
+			if row.Status != tt.wantStatus {
+				t.Fatalf("Status = %q, want %q", row.Status, tt.wantStatus)
+			}
+			if row.Provider != "ollama" || row.Label != OllamaLabel {
+				t.Fatalf("row identity = %q/%q, want ollama/%q", row.Provider, row.Label, OllamaLabel)
+			}
+			if row.Public {
+				t.Fatal("Public = true, want false for a local server")
+			}
+			if row.Detail == "" {
+				t.Fatal("Detail is empty; the row must say what was actually checked")
+			}
+		})
+	}
+}
+
+func TestChecker_CheckOllama_RecoversAfterServerStarts(t *testing.T) {
+	t.Parallel()
+
+	// A server that is first down, then up, then down again at the same address.
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	listener := server.Listener
+	baseURL := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close reserved listener: %v", err)
+	}
 
 	checker := &Checker{HTTPClient: http.DefaultClient}
-	row, ok := checker.CheckOllama(context.Background(), unreachableURL)
 
-	if ok {
-		t.Fatalf("ok = true, want false for unreachable server, got row %+v", row)
+	row, ok := checker.CheckOllama(context.Background(), baseURL)
+	if !ok || row.Status != StatusUnreachable {
+		t.Fatalf("before start: (status %q, ok %v), want (%q, true)", row.Status, ok, StatusUnreachable)
+	}
+
+	listener, err := net.Listen("tcp", listener.Addr().String())
+	if err != nil {
+		t.Skipf("could not rebind %s: %v", baseURL, err)
+	}
+	server.Listener = listener
+	server.Start()
+
+	row, ok = checker.CheckOllama(context.Background(), baseURL)
+	if !ok || row.Status != StatusOperational {
+		t.Fatalf("after start: (status %q, ok %v), want (%q, true)", row.Status, ok, StatusOperational)
+	}
+
+	server.Close()
+
+	row, ok = checker.CheckOllama(context.Background(), baseURL)
+	if !ok || row.Status != StatusUnreachable {
+		t.Fatalf("after stop: (status %q, ok %v), want (%q, true)", row.Status, ok, StatusUnreachable)
+	}
+}
+
+func TestOllamaConfigured_MatchesCheckOllamaRowPresence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+		want    bool
+	}{
+		{name: "empty", baseURL: "", want: false},
+		{name: "whitespace", baseURL: "   ", want: false},
+		{name: "localhost", baseURL: "http://localhost:11434", want: true},
+		{name: "ipv4 loopback", baseURL: "http://127.0.0.1:11434", want: true},
+		{name: "ipv6 loopback", baseURL: "http://[::1]:11434", want: true},
+		{name: "private network", baseURL: "http://10.0.0.5:11434", want: false},
+		{name: "cloud metadata", baseURL: "http://169.254.169.254", want: false},
+		{name: "remote hostname", baseURL: "https://ollama.example.com", want: false},
+		{name: "credentials", baseURL: "http://user:pw@localhost:11434", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := OllamaConfigured(tt.baseURL); got != tt.want {
+				t.Fatalf("OllamaConfigured(%q) = %v, want %v", tt.baseURL, got, tt.want)
+			}
+
+			// The helper must agree with the checker, which never sends a request
+			// for a rejected URL and always returns a row for an accepted one.
+			checker := &Checker{ollamaTransport: &recordingTransport{}}
+			if _, ok := checker.CheckOllama(context.Background(), tt.baseURL); ok != tt.want {
+				t.Fatalf("CheckOllama(%q) ok = %v, want %v to match OllamaConfigured", tt.baseURL, ok, tt.want)
+			}
+		})
 	}
 }
 
@@ -173,22 +315,6 @@ func TestChecker_CheckOllama_IncludedWhenTagsEndpointAnswers(t *testing.T) {
 	}
 	if row.Public {
 		t.Fatal("Public = true, want false for a local server")
-	}
-}
-
-func TestChecker_CheckOllama_OmittedOnNon200(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-
-	checker := &Checker{HTTPClient: server.Client()}
-	row, ok := checker.CheckOllama(context.Background(), server.URL)
-
-	if ok {
-		t.Fatalf("ok = true, want false for a non-200 response, got row %+v", row)
 	}
 }
 
