@@ -95,6 +95,7 @@ func newRootCmd() *cobra.Command {
 		newTestCmd(opts),
 		newValidateCmd(opts),
 		newInitCmd(opts),
+		newUpgradeCmd(opts),
 		newVersionCmd(),
 	)
 

@@ -18,6 +18,7 @@ import (
 	"github.com/OberWatch/oberwatch/internal/config"
 	"github.com/OberWatch/oberwatch/internal/provider"
 	"github.com/OberWatch/oberwatch/internal/storage"
+	"github.com/OberWatch/oberwatch/internal/upgrade"
 )
 
 const (
@@ -48,6 +49,7 @@ type Server struct {
 	broker          *broker
 	providerChecker providerStatusChecker
 	ollamaBaseURL   string
+	upgrader        upgradeManager
 
 	// now is the clock used for provider status freshness. Tests replace it.
 	now func() time.Time
@@ -94,6 +96,7 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 		pricing:         append([]config.PricingEntry(nil), cfg.Pricing...),
 		providerChecker: provider.NewChecker(),
 		ollamaBaseURL:   cfg.Upstream.Ollama.BaseURL,
+		upgrader:        upgrade.NewManager(version),
 		now:             func() time.Time { return time.Now().UTC() },
 		providerRows:    initialProviderRows(cfg.Upstream.Ollama.BaseURL),
 		broker: &broker{
@@ -399,6 +402,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/agents", s.handleAgents)
 	s.mux.HandleFunc(basePath+"/agents/", s.handleAgentByName)
 	s.mux.HandleFunc(basePath+"/stream", s.handleStream)
+	s.mux.HandleFunc(basePath+"/upgrade", s.handleUpgrade)
+	s.mux.HandleFunc(basePath+"/upgrade/status", s.handleUpgradeStatus)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,15 @@ LINUX_SERVICE_HOME="/home/${LINUX_SERVICE_USER}"
 LINUX_STATE_DIR="${LINUX_SERVICE_HOME}/.oberwatch"
 HEALTH_URL="http://localhost:8080/_oberwatch/api/v1/health"
 
+# In-dashboard upgrades. The service runs unprivileged and cannot replace the
+# binary it is running, so it writes a request into UPGRADE_STATE_DIR and a
+# root-only unit does the swap. Both halves derive every path from these values;
+# nothing about an upgrade comes from a dashboard request. Keep these in step
+# with internal/upgrade/paths.go.
+UPGRADE_SERVICE_NAME="oberwatch-upgrade"
+UPGRADE_STATE_DIR="/var/lib/oberwatch/upgrade"
+UPGRADE_REQUEST_PATH="${UPGRADE_STATE_DIR}/request.json"
+
 print_banner() {
   cat <<'BANNER'
  ::::::::  :::::::::  :::::::::: :::::::::  :::       :::     ::: ::::::::::: ::::::::  :::    ::: 
@@ -505,10 +514,54 @@ WantedBy=multi-user.target
 SERVICE
 }
 
+setup_upgrade_handoff() {
+  # Owned by the service user so the unprivileged service can stage a verified
+  # archive and write a request, and mode 0700 so nobody else can put anything
+  # there for the root helper to look at. The parent stays root-owned. Both
+  # halves refuse to act on a group- or world-writable handoff directory.
+  sudo_cmd mkdir -p "${UPGRADE_STATE_DIR}"
+  sudo_cmd chown "${LINUX_SERVICE_USER}:${LINUX_SERVICE_USER}" "${UPGRADE_STATE_DIR}"
+  sudo_cmd chmod 0700 "${UPGRADE_STATE_DIR}"
+  # A request left by an earlier session names a version this run has just
+  # installed anyway. Clearing it stops the path unit from firing on it and
+  # recording a refusal the operator would read as a failed upgrade.
+  sudo_cmd rm -f "${UPGRADE_REQUEST_PATH}"
+}
+
+write_upgrade_units() {
+  # The applier takes no argument. It reads the requested version from the
+  # request file, refuses anything that is not a stable release newer than the
+  # installed one, and re-verifies the staged archive against the checksums
+  # published with that release before replacing anything.
+  sudo_cmd tee "/etc/systemd/system/${UPGRADE_SERVICE_NAME}.service" >/dev/null <<SERVICE
+[Unit]
+Description=Apply an Oberwatch upgrade requested from the dashboard
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=${INSTALL_PATH} upgrade apply
+SERVICE
+
+  sudo_cmd tee "/etc/systemd/system/${UPGRADE_SERVICE_NAME}.path" >/dev/null <<PATHUNIT
+[Unit]
+Description=Watch for an Oberwatch upgrade request
+
+[Path]
+PathExists=${UPGRADE_REQUEST_PATH}
+Unit=${UPGRADE_SERVICE_NAME}.service
+
+[Install]
+WantedBy=multi-user.target
+PATHUNIT
+}
+
 start_linux_service() {
   need_cmd systemctl
   sudo_cmd systemctl daemon-reload
   sudo_cmd systemctl enable "${SERVICE_NAME}"
+  sudo_cmd systemctl enable "${UPGRADE_SERVICE_NAME}.path"
+  sudo_cmd systemctl restart "${UPGRADE_SERVICE_NAME}.path"
   if sudo_cmd systemctl is-active --quiet "${SERVICE_NAME}"; then
     sudo_cmd systemctl restart "${SERVICE_NAME}"
   else
@@ -538,6 +591,7 @@ print_success_linux() {
 → Config:     ${LINUX_STATE_DIR}/oberwatch.toml
 → Data:       ${LINUX_STATE_DIR}/data/
 → Logs:       sudo journalctl -u ${SERVICE_NAME} -f
+→ Upgrades:   available from the dashboard sidebar when a newer release exists
 
 Open the dashboard to complete setup.
 
@@ -628,6 +682,8 @@ main() {
     setup_linux_service_user
     sync_linux_service_state
     write_systemd_service
+    setup_upgrade_handoff
+    write_upgrade_units
     start_linux_service
 
     if wait_for_health; then

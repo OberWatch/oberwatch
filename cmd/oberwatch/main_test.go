@@ -32,6 +32,8 @@ func TestNewRootCmd_RegistersCommands(t *testing.T) {
 		{name: "test run", command: "test run", wantName: "run"},
 		{name: "validate", command: "validate", wantName: "validate"},
 		{name: "init", command: "init", wantName: "init"},
+		{name: "upgrade", command: "upgrade", wantName: "upgrade"},
+		{name: "upgrade apply", command: "upgrade apply", wantName: "apply"},
 		{name: "version", command: "version", wantName: "version"},
 	}
 
