@@ -41,23 +41,11 @@ limit_usd = 100.0
 period = "hourly"
 action_on_exceed = "reject"
 
-[[gate.agents]]
-name = "stream-agent-usage"
-limit_usd = 100.0
-period = "hourly"
-action_on_exceed = "reject"
-
-[[gate.agents]]
-name = "stream-agent-delta"
-limit_usd = 100.0
-period = "hourly"
-action_on_exceed = "reject"
-
-[[gate.agents]]
-name = "nonstream-agent"
-limit_usd = 100.0
-period = "hourly"
-action_on_exceed = "reject"
+[[pricing]]
+model = "gpt-4o"
+provider = "openai"
+input_per_million = 1.0
+output_per_million = 1.0
 EOF
 
 # Mock SSE server with three scenarios served via path:

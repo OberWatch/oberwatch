@@ -126,20 +126,6 @@ func validateGate(gate GateConfig) []string {
 	if gate.Identification.Method == IdentificationMethodAPIKey && len(gate.APIKeyMap) == 0 {
 		problems = append(problems, "gate.api_key_map must not be empty when gate.identification.method is api_key")
 	}
-	for i, agent := range gate.Agents {
-		if strings.TrimSpace(agent.Name) == "" {
-			problems = append(problems, fmt.Sprintf("gate.agents[%d].name must not be empty", i))
-		}
-		if agent.LimitUSD < 0 {
-			problems = append(problems, fmt.Sprintf("gate.agents[%d].limit_usd must be non-negative, got %v", i, agent.LimitUSD))
-		}
-		if agent.TaskBudgetUSD < 0 {
-			problems = append(problems, fmt.Sprintf("gate.agents[%d].task_budget_usd must be non-negative, got %v", i, agent.TaskBudgetUSD))
-		}
-		problems = append(problems, validateBudgetPeriod(fmt.Sprintf("gate.agents[%d].period", i), agent.Period)...)
-		problems = append(problems, validateBudgetAction(fmt.Sprintf("gate.agents[%d].action_on_exceed", i), agent.ActionOnExceed)...)
-
-	}
 	for i, entry := range gate.APIKeyMap {
 		if strings.TrimSpace(entry.APIKeyPrefix) == "" {
 			problems = append(problems, fmt.Sprintf("gate.api_key_map[%d].api_key_prefix must not be empty", i))

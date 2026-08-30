@@ -89,7 +89,6 @@ type GateConfig struct {
 	AlertThresholdsPct    []float64            `toml:"alert_thresholds_pct"`
 	GlobalBudget          BudgetLimitConfig    `toml:"global_budget"`
 	DefaultBudget         BudgetPolicyConfig   `toml:"default_budget"`
-	Agents                []AgentBudgetConfig  `toml:"agents"`
 	Identification        IdentificationConfig `toml:"identification"`
 	APIKeyMap             []APIKeyMapEntry     `toml:"api_key_map"`
 	Runaway               RunawayConfig        `toml:"runaway"`
@@ -113,18 +112,6 @@ type BudgetPolicyConfig struct {
 	Period         BudgetPeriod `toml:"period"`
 	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
 	LimitUSD       float64      `toml:"limit_usd"`
-}
-
-// AgentBudgetConfig defines a per-agent override.
-type AgentBudgetConfig struct {
-	Name           string       `toml:"name"`
-	Period         BudgetPeriod `toml:"period"`
-	ActionOnExceed BudgetAction `toml:"action_on_exceed"`
-	DowngradeChain []string     `toml:"downgrade_chain"`
-	LimitUSD       float64      `toml:"limit_usd"`
-	// TaskBudgetUSD, when greater than zero, is preferred over gate.task_budget_usd
-	// for tasks driven by this agent. Zero inherits the gate-level value.
-	TaskBudgetUSD float64 `toml:"task_budget_usd"`
 }
 
 // BudgetPeriod is a budget reset window.

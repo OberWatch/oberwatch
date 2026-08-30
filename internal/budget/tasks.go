@@ -106,9 +106,13 @@ func (m *BudgetManager) TaskLimitUSD(agent string) float64 {
 	return m.taskLimitLocked(normalizeAgent(agent))
 }
 
+// taskLimitLocked resolves the effective task cap for one agent. SQLite is
+// the only source of a per-agent override (via UpdateBudget or a persisted
+// agent record loaded at startup); an agent with no override, or one whose
+// override is zero, inherits the gate-level default.
 func (m *BudgetManager) taskLimitLocked(agent string) float64 {
-	if limit, ok := m.agentTaskLimit[agent]; ok && limit > 0 {
-		return limit
+	if policy, ok := m.agentPolicy[agent]; ok && policy.taskBudgetUSD > 0 {
+		return policy.taskBudgetUSD
 	}
 	return m.defaultTaskLimit
 }

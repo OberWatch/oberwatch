@@ -141,15 +141,6 @@ window_seconds = 60
 # "source_ip" maps source IPs to agents.
 method = "header"
 
-# Uncomment to define per-agent budget overrides.
-# [[gate.agents]]
-# name = "my-agent"
-# limit_usd = 10.00
-# period = "daily"
-# action_on_exceed = "downgrade"
-# downgrade_chain = ["claude-sonnet-5", "claude-haiku-4-5"]
-# task_budget_usd = 2.00
-
 # Uncomment when method = "api_key".
 # [[gate.api_key_map]]
 # api_key_prefix = "sk-proj-abc"

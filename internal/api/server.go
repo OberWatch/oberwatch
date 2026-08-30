@@ -663,6 +663,7 @@ func (s *Server) handleBudgetAgentCRUD(w http.ResponseWriter, r *http.Request, a
 			DowngradeChain        []string            `json:"downgrade_chain"`
 			DowngradeThresholdPct float64             `json:"downgrade_threshold_pct"`
 			AlertThresholdsPct    []float64           `json:"alert_thresholds_pct"`
+			TaskBudgetUSD         *float64            `json:"task_budget_usd"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			writeError(w, http.StatusBadRequest, "config_error", fmt.Sprintf("invalid budget payload: %v", err), agent, 0, 0)
@@ -676,6 +677,7 @@ func (s *Server) handleBudgetAgentCRUD(w http.ResponseWriter, r *http.Request, a
 			DowngradeChain:        payload.DowngradeChain,
 			DowngradeThresholdPct: payload.DowngradeThresholdPct,
 			AlertThresholdsPct:    payload.AlertThresholdsPct,
+			TaskBudgetUSD:         payload.TaskBudgetUSD,
 		}); err != nil {
 			writeError(w, http.StatusBadRequest, "config_error", err.Error(), agent, 0, 0)
 			return
@@ -1152,8 +1154,6 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request, agent
 	deletion, err := s.budget.DeleteAgent(r.Context(), agent)
 	if err != nil {
 		switch {
-		case errors.Is(err, budget.ErrAgentProtected):
-			writeError(w, http.StatusConflict, "agent_protected", "agent is defined in the configuration file and cannot be deleted from the dashboard; remove it from the config instead", agent, 0, 0)
 		case errors.Is(err, storage.ErrAgentNotFound):
 			writeError(w, http.StatusNotFound, "agent_not_found", "agent not found", agent, 0, 0)
 		default:
@@ -1333,6 +1333,7 @@ func encodeBudgetRecord(record storage.AgentRecord, view budget.BudgetView) map[
 		"downgrade_threshold_pct": record.DowngradeThresholdPct,
 		"alert_thresholds_pct":    record.AlertThresholdsPct,
 		"period_resets_at":        view.PeriodResetsAt.UTC().Format(time.RFC3339),
+		"task_budget_usd":         record.TaskBudgetUSD,
 	}
 }
 

@@ -19,11 +19,6 @@ import (
 
 const unknownAgent = "unknown"
 
-// ErrAgentProtected indicates the agent is declared in the gate configuration
-// and would be recreated from that configuration on the next start, so
-// deleting it through the API would not stick.
-var ErrAgentProtected = errors.New("agent is defined in configuration")
-
 const (
 	disableReasonNone           = ""
 	disableReasonBudgetExceeded = "budget_exceeded"
@@ -75,6 +70,10 @@ type agentPolicy struct {
 	actionOnExceed        config.BudgetAction
 	downgradeChain        []string
 	alertThresholdsPct    []float64
+	// taskBudgetUSD, when greater than zero, is preferred over the gate-level
+	// default (m.defaultTaskLimit) for tasks driven by this agent. Zero
+	// inherits the gate value.
+	taskBudgetUSD float64
 }
 
 //nolint:govet // keep state fields grouped by update/read patterns.
@@ -126,6 +125,11 @@ type BudgetUpdate struct {
 	LimitUSD              float64
 	DowngradeChain        []string
 	AlertThresholdsPct    []float64
+	// TaskBudgetUSD, when nil, leaves the agent's task budget override
+	// untouched. A non-nil value greater than zero is preferred over the
+	// gate-level default; a non-nil zero explicitly makes this agent inherit
+	// the gate value.
+	TaskBudgetUSD *float64
 }
 
 // Dispatcher routes budget-generated alert events.
@@ -173,7 +177,6 @@ type BudgetManager struct {
 	runaway              config.RunawayConfig
 	emergency            bool
 	knownAgents          map[string]struct{}
-	configuredAgents     map[string]struct{}
 	flushInterval        time.Duration
 	flushStop            chan struct{}
 	flushWG              sync.WaitGroup
@@ -191,7 +194,6 @@ type BudgetManager struct {
 	globalState    globalBudgetState
 
 	defaultTaskLimit float64
-	agentTaskLimit   map[string]float64
 	tasks            map[string]*taskState
 }
 
@@ -229,72 +231,6 @@ func NewPersistentManagerWithClockAndDispatcher(
 	return newManager(gate, logger, store, clock, dispatcher, true)
 }
 
-// SeedConfiguredAgents writes TOML-configured agents into the persistent store.
-func SeedConfiguredAgents(ctx context.Context, gate config.GateConfig, store storage.Store, clock Clock) error {
-	if store == nil {
-		return nil
-	}
-	if clock == nil {
-		clock = realClock{}
-	}
-
-	defaultPolicy := agentPolicy{
-		period:                gate.DefaultBudget.Period,
-		actionOnExceed:        gate.DefaultBudget.ActionOnExceed,
-		limitUSD:              gate.DefaultBudget.LimitUSD,
-		downgradeThresholdPct: gate.DowngradeThresholdPct,
-		downgradeChain:        append([]string(nil), gate.DefaultDowngradeChain...),
-		alertThresholdsPct:    append([]float64(nil), gate.AlertThresholdsPct...),
-	}
-
-	for _, entry := range gate.Agents {
-		normalized := normalizeAgent(entry.Name)
-		policy := clonePolicy(defaultPolicy)
-		policy.period = entry.Period
-		policy.actionOnExceed = entry.ActionOnExceed
-		policy.limitUSD = entry.LimitUSD
-		if len(entry.DowngradeChain) > 0 {
-			policy.downgradeChain = append([]string(nil), entry.DowngradeChain...)
-		}
-
-		record, found, err := store.GetAgent(ctx, normalized)
-		if err != nil {
-			return fmt.Errorf("load persisted agent %q: %w", normalized, err)
-		}
-		if !found {
-			now := clock.Now().UTC()
-			record = storage.AgentRecord{
-				Name:            normalized,
-				Status:          "active",
-				PeriodStartedAt: now,
-				PeriodResetsAt:  nextPeriodReset(now, policy.period),
-				FirstSeenAt:     now,
-				LastSeenAt:      now,
-			}
-		}
-
-		record.Name = normalized
-		record.BudgetLimitUSD = policy.limitUSD
-		record.BudgetPeriod = policy.period
-		record.ActionOnExceed = policy.actionOnExceed
-		record.DowngradeChain = append([]string(nil), policy.downgradeChain...)
-		record.DowngradeThresholdPct = policy.downgradeThresholdPct
-		record.AlertThresholdsPct = append([]float64(nil), policy.alertThresholdsPct...)
-		if record.PeriodStartedAt.IsZero() {
-			record.PeriodStartedAt = clock.Now().UTC()
-		}
-		if record.PeriodResetsAt.IsZero() {
-			record.PeriodResetsAt = nextPeriodReset(record.PeriodStartedAt, policy.period)
-		}
-
-		if err := store.UpsertAgent(ctx, record); err != nil {
-			return fmt.Errorf("seed configured agent %q: %w", normalized, err)
-		}
-	}
-
-	return nil
-}
-
 func newManager(
 	gate config.GateConfig,
 	logger *slog.Logger,
@@ -323,7 +259,6 @@ func newManager(
 		identificationMethod: gate.Identification.Method,
 		apiKeyMap:            append([]config.APIKeyMapEntry(nil), gate.APIKeyMap...),
 		knownAgents:          make(map[string]struct{}),
-		configuredAgents:     make(map[string]struct{}, len(gate.Agents)),
 		runaway:              gate.Runaway,
 		defaultState: agentPolicy{
 			period:                gate.DefaultBudget.Period,
@@ -340,24 +275,7 @@ func newManager(
 			periodResetsAt: nextPeriodReset(now, globalPeriod),
 		},
 		defaultTaskLimit: gate.TaskBudgetUSD,
-		agentTaskLimit:   make(map[string]float64),
 		tasks:            make(map[string]*taskState),
-	}
-
-	for _, entry := range gate.Agents {
-		policy := manager.defaultState
-		policy.period = entry.Period
-		policy.actionOnExceed = entry.ActionOnExceed
-		policy.limitUSD = entry.LimitUSD
-		if len(entry.DowngradeChain) > 0 {
-			policy.downgradeChain = append([]string(nil), entry.DowngradeChain...)
-		}
-		normalized := normalizeAgent(entry.Name)
-		manager.agentPolicy[normalized] = policy
-		manager.configuredAgents[normalized] = struct{}{}
-		if entry.TaskBudgetUSD > 0 {
-			manager.agentTaskLimit[normalized] = entry.TaskBudgetUSD
-		}
 	}
 
 	if persistent && store != nil {
@@ -1010,6 +928,7 @@ func (m *BudgetManager) loadPersistedAgents(ctx context.Context) error {
 			actionOnExceed:        record.ActionOnExceed,
 			downgradeChain:        append([]string(nil), record.DowngradeChain...),
 			alertThresholdsPct:    append([]float64(nil), record.AlertThresholdsPct...),
+			taskBudgetUSD:         record.TaskBudgetUSD,
 		}
 		m.state[agent] = &agentState{
 			spentUSD:        record.BudgetSpentUSD,
@@ -1101,14 +1020,9 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 	m.knownAgents[newName] = struct{}{}
 	m.state[newName].dirty = true
 
-	// The per-agent task cap and the agent recorded on each task are part of the
-	// same identity as the policy above. Leaving them behind would silently drop
-	// this agent's task cap back to the gate value after a rename.
-	taskLimit, hadTaskLimit := m.agentTaskLimit[oldName]
-	if hadTaskLimit {
-		delete(m.agentTaskLimit, oldName)
-		m.agentTaskLimit[newName] = taskLimit
-	}
+	// The agent recorded on each task is part of the same identity as the
+	// policy above. Leaving it behind would silently detach this agent's
+	// in-flight tasks after a rename.
 	renamedTasks := make([]*taskState, 0)
 	for _, task := range m.tasks {
 		if task.lastAgent != oldName {
@@ -1129,10 +1043,6 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 			m.agentPolicy[oldName] = policy
 			m.state[oldName] = state
 			m.knownAgents[oldName] = struct{}{}
-			if hadTaskLimit {
-				delete(m.agentTaskLimit, newName)
-				m.agentTaskLimit[oldName] = taskLimit
-			}
 			for _, task := range renamedTasks {
 				task.lastAgent = oldName
 			}
@@ -1145,11 +1055,10 @@ func (m *BudgetManager) RenameAgent(ctx context.Context, oldName string, newName
 }
 
 // DeleteAgent forgets one agent at runtime and removes its persisted rows.
-//
-// Agents declared in the gate configuration return ErrAgentProtected because
-// the next start would seed them again. An agent that is neither tracked in
-// memory nor persisted returns storage.ErrAgentNotFound, which is also what the
-// loser of two concurrent deletes sees.
+// SQLite is the only source of agent records, so any agent name may be
+// deleted; there is no configuration-declared agent to protect. An agent that
+// is neither tracked in memory nor persisted returns storage.ErrAgentNotFound,
+// which is also what the loser of two concurrent deletes sees.
 //
 // Two locks are held, in this order. flushMu excludes a concurrent Flush,
 // whose store writes happen outside mu and would otherwise put the deleted
@@ -1166,11 +1075,6 @@ func (m *BudgetManager) DeleteAgent(ctx context.Context, agent string) (storage.
 	defer m.flushMu.Unlock()
 
 	m.mu.Lock()
-	if _, configured := m.configuredAgents[normalized]; configured {
-		m.mu.Unlock()
-		return storage.AgentDeletion{}, ErrAgentProtected
-	}
-
 	_, tracked := m.knownAgents[normalized]
 	if _, ok := m.state[normalized]; ok {
 		tracked = true
@@ -1199,7 +1103,6 @@ func (m *BudgetManager) DeleteAgent(ctx context.Context, agent string) (storage.
 	delete(m.agentPolicy, normalized)
 	delete(m.state, normalized)
 	delete(m.knownAgents, normalized)
-	delete(m.agentTaskLimit, normalized)
 	for _, task := range m.tasks {
 		if task.lastAgent != normalized {
 			continue
@@ -1270,6 +1173,7 @@ func (m *BudgetManager) agentRecordLocked(agent string, policy agentPolicy, stat
 		PeriodResetsAt:        state.periodResetsAt,
 		FirstSeenAt:           firstSeenAt,
 		LastSeenAt:            lastSeenAt,
+		TaskBudgetUSD:         policy.taskBudgetUSD,
 	}
 }
 
@@ -1281,6 +1185,7 @@ func clonePolicy(policy agentPolicy) agentPolicy {
 		actionOnExceed:        policy.actionOnExceed,
 		downgradeChain:        append([]string(nil), policy.downgradeChain...),
 		alertThresholdsPct:    append([]float64(nil), policy.alertThresholdsPct...),
+		taskBudgetUSD:         policy.taskBudgetUSD,
 	}
 }
 
@@ -1423,6 +1328,9 @@ func (m *BudgetManager) UpdateBudget(agent string, update BudgetUpdate) error {
 	if update.DowngradeThresholdPct < 0 || update.DowngradeThresholdPct > 100 {
 		return fmt.Errorf("downgrade_threshold_pct must be between 0 and 100")
 	}
+	if update.TaskBudgetUSD != nil && *update.TaskBudgetUSD < 0 {
+		return fmt.Errorf("task_budget_usd must be non-negative")
+	}
 
 	m.mu.Lock()
 	defer func() {
@@ -1437,6 +1345,9 @@ func (m *BudgetManager) UpdateBudget(agent string, update BudgetUpdate) error {
 	policy.downgradeThresholdPct = update.DowngradeThresholdPct
 	policy.downgradeChain = append([]string(nil), update.DowngradeChain...)
 	policy.alertThresholdsPct = append([]float64(nil), update.AlertThresholdsPct...)
+	if update.TaskBudgetUSD != nil {
+		policy.taskBudgetUSD = *update.TaskBudgetUSD
+	}
 	m.agentPolicy[normalizedAgent] = policy
 
 	state, _ := m.stateForAgentLocked(normalizedAgent, policy, now)

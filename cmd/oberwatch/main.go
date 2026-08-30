@@ -700,10 +700,6 @@ func runServeRuntime(
 		baseDispatcher.Dispatch(dispatchCtx, entry)
 	})
 
-	if seedErr := budget.SeedConfiguredAgents(context.Background(), cfg.Gate, store, nil); seedErr != nil {
-		return fmt.Errorf("seed configured agents: %w", seedErr)
-	}
-
 	budgetManager, err := budget.NewPersistentManagerWithClockAndDispatcher(cfg.Gate, logger, store, nil, dispatcher)
 	if err != nil {
 		return fmt.Errorf("initialize budget manager: %w", err)

@@ -41,29 +41,7 @@ downgrade_threshold_pct = 50.0
 default_downgrade_chain = []
 
 [gate.default_budget]
-limit_usd = 10.0
-period = "hourly"
-action_on_exceed = "reject"
-
-# Test 1: explicit downgrade chain overrides builtin
-[[gate.agents]]
-name = "test-agent-explicit"
-limit_usd = 10.0
-period = "hourly"
-action_on_exceed = "downgrade"
-downgrade_chain = ["gpt-4o", "gpt-4o-mini"]
-
-# Test 2: no chain — uses builtin OpenAI chain (gpt-4o → gpt-4.1 → …)
-[[gate.agents]]
-name = "test-agent-builtin-openai"
-limit_usd = 10.0
-period = "hourly"
-action_on_exceed = "downgrade"
-
-# Test 3: no chain — uses builtin Anthropic chain (claude-opus-4-6 → claude-sonnet-4-6 → …)
-[[gate.agents]]
-name = "test-agent-builtin-anthropic"
-limit_usd = 10.0
+limit_usd = 20.0
 period = "hourly"
 action_on_exceed = "downgrade"
 
@@ -172,12 +150,12 @@ if ! curl -sf http://localhost:18080/_oberwatch/api/v1/health > /dev/null 2>&1; 
 fi
 echo "✓ Oberwatch is running"
 
-# ─── Test 1: Explicit downgrade chain (gpt-4o → gpt-4o-mini) ─────────────────
+# ─── Test 1: Builtin OpenAI chain (gpt-4o → gpt-4.1) ────────────────────────
 echo ""
-echo "--- Test 1: Explicit chain: gpt-4o → gpt-4o-mini ---"
+echo "--- Test 1: Builtin OpenAI chain: gpt-4o → gpt-4.1 ---"
 RESP1=$(curl -s -i -X POST http://localhost:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-Oberwatch-Agent: test-agent-explicit" \
+  -H "X-Oberwatch-Agent: test-agent-builtin-openai-first" \
   -H "Authorization: Bearer sk-test" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}')
 
@@ -191,13 +169,13 @@ if ! echo "$RESP1" | grep -qi "X-Oberwatch-Original-Model: gpt-4o"; then
   echo "$RESP1"
   exit 1
 fi
-# Explicit chain → upstream received gpt-4o-mini (not gpt-4.1 from builtin)
-if ! echo "$RESP1" | grep -qE '"model":\s*"gpt-4o-mini"'; then
-  echo "FAIL: Expected upstream to receive gpt-4o-mini (explicit chain)"
+# A newly discovered agent inherits the default builtin OpenAI chain.
+if ! echo "$RESP1" | grep -qE '"model":\s*"gpt-4\.1"'; then
+  echo "FAIL: Expected upstream to receive gpt-4.1 (builtin chain)"
   echo "$RESP1"
   exit 1
 fi
-echo "✓ Explicit chain: gpt-4o downgraded to gpt-4o-mini (not builtin gpt-4.1)"
+echo "✓ Builtin OpenAI chain: gpt-4o auto-downgraded to gpt-4.1"
 
 # ─── Test 2: Builtin OpenAI chain (gpt-4o → gpt-4.1) ────────────────────────
 echo ""

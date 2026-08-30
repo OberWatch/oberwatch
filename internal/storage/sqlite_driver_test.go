@@ -33,6 +33,9 @@ func downgradeSchema(t *testing.T, db *sql.DB, target int) {
 	t.Helper()
 
 	steps := map[int][]string{
+		5: {
+			"ALTER TABLE agents DROP COLUMN task_budget_usd",
+		},
 		4: {
 			"DROP INDEX IF EXISTS idx_cost_task",
 			"DROP INDEX IF EXISTS idx_task_budgets_last_seen",

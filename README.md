@@ -173,10 +173,8 @@ Current behavior includes:
 Set `gate.task_budget_usd` to cap the lifetime spend of one task. A task is
 identified by the `X-Oberwatch-Task` request header, which is stripped before
 the request reaches the provider. Requests without the header, or with a blank
-value, are not task-budgeted and never share a bucket. A `[[gate.agents]]`
-entry can set its own `task_budget_usd`; a value above zero is preferred over
-the gate value, zero inherits it. `task_budget_usd = 0` at the gate level
-disables task budgets.
+value, are not task-budgeted and never share a bucket. `task_budget_usd = 0`
+at the gate level disables task budgets.
 
 Task caps and agent budgets are tracked separately and enforced separately. A
 request must fit both: its cost is added to the agent period budget and to the
@@ -242,7 +240,7 @@ Start with the example config:
 - [oberwatch.example.toml](./oberwatch.example.toml)
 
 You can run fully config-free, but a config file becomes useful when you want to define:
-- explicit agent budgets
+- default and global budgets
 - downgrade chains
 - alert thresholds
 - upstream base URLs
