@@ -118,16 +118,18 @@ func TestServer_DeleteAgentEndpoint(t *testing.T) {
 			wantCode:   "config_error",
 		},
 		{
-			name:       "configured agent is protected",
+			name:       "any persisted agent can be deleted, including one seeded before the server started",
 			method:     http.MethodDelete,
 			target:     "email-agent",
 			auth:       true,
-			wantStatus: http.StatusConflict,
-			wantCode:   "agent_protected",
-			assert: func(t *testing.T, _ *budget.BudgetManager, store storage.Store, _ map[string]any) {
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, _ *budget.BudgetManager, store storage.Store, payload map[string]any) {
 				t.Helper()
-				if _, found, err := store.GetAgent(context.Background(), "email-agent"); err != nil || !found {
-					t.Fatalf("GetAgent(email-agent) = found %v, err %v; want kept", found, err)
+				if mustString(t, payload, "status") != "deleted" || mustString(t, payload, "agent") != "email-agent" {
+					t.Fatalf("payload = %#v", payload)
+				}
+				if _, found, err := store.GetAgent(context.Background(), "email-agent"); err != nil || found {
+					t.Fatalf("GetAgent(email-agent) = found %v, err %v; want gone", found, err)
 				}
 			},
 		},
@@ -272,7 +274,6 @@ func TestServer_DeleteAgentPublishesEvent(t *testing.T) {
 	}{
 		{name: "a successful delete announces the agent", target: "scratch-agent", wantEvent: true},
 		{name: "a missing agent announces nothing", target: "never-seen", wantEvent: false},
-		{name: "a protected agent announces nothing", target: "email-agent", wantEvent: false},
 	}
 
 	for _, tt := range tests {

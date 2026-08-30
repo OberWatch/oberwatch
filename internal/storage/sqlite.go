@@ -20,7 +20,7 @@ import (
 	sqlite "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // SQLiteStore persists Oberwatch data in SQLite.
 //
@@ -198,6 +198,11 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			);`,
 			"CREATE INDEX IF NOT EXISTS idx_task_budgets_last_seen ON task_budgets(last_seen_at);",
 			"CREATE INDEX IF NOT EXISTS idx_cost_task ON cost_records(task_id);",
+		},
+		5: {
+			// SQLite is the only source of per-agent policy, including the
+			// per-agent task budget override that used to live only in TOML.
+			"ALTER TABLE agents ADD COLUMN task_budget_usd REAL NOT NULL DEFAULT 0;",
 		},
 	}
 
@@ -612,8 +617,8 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, record AgentRecord) error
 			name, status, budget_limit_usd, budget_period, budget_spent_usd,
 			action_on_exceed, downgrade_chain, downgrade_threshold_pct,
 			alert_thresholds_pct, period_started_at, period_resets_at,
-			first_seen_at, last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			first_seen_at, last_seen_at, task_budget_usd
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			status = excluded.status,
 			budget_limit_usd = excluded.budget_limit_usd,
@@ -626,7 +631,8 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, record AgentRecord) error
 			period_started_at = excluded.period_started_at,
 			period_resets_at = excluded.period_resets_at,
 			first_seen_at = COALESCE(agents.first_seen_at, excluded.first_seen_at),
-			last_seen_at = excluded.last_seen_at
+			last_seen_at = excluded.last_seen_at,
+			task_budget_usd = excluded.task_budget_usd
 	`,
 		strings.TrimSpace(record.Name),
 		record.Status,
@@ -641,6 +647,7 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, record AgentRecord) error
 		formatOptionalTime(record.PeriodResetsAt),
 		record.FirstSeenAt.UTC().Format(time.RFC3339Nano),
 		record.LastSeenAt.UTC().Format(time.RFC3339Nano),
+		record.TaskBudgetUSD,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert agent %q: %w", record.Name, err)
@@ -654,7 +661,7 @@ func (s *SQLiteStore) GetAgent(ctx context.Context, name string) (AgentRecord, b
 		SELECT name, status, budget_limit_usd, budget_period, budget_spent_usd,
 			action_on_exceed, downgrade_chain, downgrade_threshold_pct,
 			alert_thresholds_pct, period_started_at, period_resets_at,
-			first_seen_at, last_seen_at
+			first_seen_at, last_seen_at, task_budget_usd
 		FROM agents
 		WHERE name = ?
 	`, strings.TrimSpace(name))
@@ -672,7 +679,7 @@ func (s *SQLiteStore) ListAgents(ctx context.Context) ([]AgentRecord, error) {
 		SELECT name, status, budget_limit_usd, budget_period, budget_spent_usd,
 			action_on_exceed, downgrade_chain, downgrade_threshold_pct,
 			alert_thresholds_pct, period_started_at, period_resets_at,
-			first_seen_at, last_seen_at
+			first_seen_at, last_seen_at, task_budget_usd
 		FROM agents
 		ORDER BY name ASC
 	`)
@@ -1117,6 +1124,7 @@ func scanAgentRecord(scan scannerFunc) (AgentRecord, bool, error) {
 		&periodResetsAt,
 		&firstSeenAt,
 		&lastSeenAt,
+		&record.TaskBudgetUSD,
 	)
 	if err == sql.ErrNoRows {
 		return AgentRecord{}, false, nil

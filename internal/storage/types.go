@@ -165,6 +165,9 @@ type AgentRecord struct {
 	PeriodResetsAt        time.Time
 	FirstSeenAt           time.Time
 	LastSeenAt            time.Time
+	// TaskBudgetUSD, when greater than zero, is preferred over the gate-level
+	// task_budget_usd for tasks driven by this agent. Zero inherits the gate value.
+	TaskBudgetUSD float64
 }
 
 // CostRecordSink is a non-blocking enqueue target for async cost persistence.

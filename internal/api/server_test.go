@@ -424,6 +424,86 @@ func TestServer_BudgetUpdatePersists(t *testing.T) {
 	}
 }
 
+func TestServer_BudgetUpdateTaskBudgetUSD(t *testing.T) {
+	t.Parallel()
+
+	server, _, store := newTestServer(t)
+
+	putBody := `{"limit_usd":10,"period":"daily","action_on_exceed":"alert","task_budget_usd":5}`
+	putReq := httptest.NewRequest(http.MethodPut, basePath+"/budgets/email-agent", strings.NewReader(putBody))
+	addAuthenticatedSessionCookie(t, store, putReq)
+	putReq.Header.Set("Content-Type", "application/json")
+	putRecorder := httptest.NewRecorder()
+	server.ServeHTTP(putRecorder, putReq)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d, body = %s", putRecorder.Code, http.StatusOK, putRecorder.Body.String())
+	}
+	putPayload := decodeJSONMap(t, putRecorder.Result().Body)
+	if got := mustFloat(t, putPayload, "task_budget_usd"); got != 5 {
+		t.Fatalf("PUT response task_budget_usd = %v, want 5", got)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, basePath+"/budgets/email-agent", nil)
+	addAuthenticatedSessionCookie(t, store, getReq)
+	getRecorder := httptest.NewRecorder()
+	server.ServeHTTP(getRecorder, getReq)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", getRecorder.Code, http.StatusOK)
+	}
+	getPayload := decodeJSONMap(t, getRecorder.Result().Body)
+	if got := mustFloat(t, getPayload, "task_budget_usd"); got != 5 {
+		t.Fatalf("GET response task_budget_usd = %v, want 5", got)
+	}
+
+	// Task budget must survive a restart: rebuild the manager and server
+	// against the same SQLite file, the way a process restart would.
+	cfg := config.DefaultConfig()
+	restartedManager, err := budget.NewPersistentManager(cfg.Gate, nil, store)
+	if err != nil {
+		t.Fatalf("NewPersistentManager() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restartedManager.Close() })
+	restartedServer := New(cfg, restartedManager, store, "0.1.0")
+
+	afterRestartReq := httptest.NewRequest(http.MethodGet, basePath+"/budgets/email-agent", nil)
+	addAuthenticatedSessionCookie(t, store, afterRestartReq)
+	afterRestartRecorder := httptest.NewRecorder()
+	restartedServer.ServeHTTP(afterRestartRecorder, afterRestartReq)
+	if afterRestartRecorder.Code != http.StatusOK {
+		t.Fatalf("GET after restart status = %d, want %d", afterRestartRecorder.Code, http.StatusOK)
+	}
+	afterRestartPayload := decodeJSONMap(t, afterRestartRecorder.Result().Body)
+	if got := mustFloat(t, afterRestartPayload, "task_budget_usd"); got != 5 {
+		t.Fatalf("task_budget_usd after restart = %v, want 5", got)
+	}
+
+	// A zero task_budget_usd explicitly means "inherit the gate default".
+	zeroPutBody := `{"limit_usd":10,"period":"daily","action_on_exceed":"alert","task_budget_usd":0}`
+	zeroPutReq := httptest.NewRequest(http.MethodPut, basePath+"/budgets/email-agent", strings.NewReader(zeroPutBody))
+	addAuthenticatedSessionCookie(t, store, zeroPutReq)
+	zeroPutReq.Header.Set("Content-Type", "application/json")
+	zeroPutRecorder := httptest.NewRecorder()
+	server.ServeHTTP(zeroPutRecorder, zeroPutReq)
+	if zeroPutRecorder.Code != http.StatusOK {
+		t.Fatalf("PUT (zero) status = %d, want %d, body = %s", zeroPutRecorder.Code, http.StatusOK, zeroPutRecorder.Body.String())
+	}
+	zeroPutPayload := decodeJSONMap(t, zeroPutRecorder.Result().Body)
+	if got := mustFloat(t, zeroPutPayload, "task_budget_usd"); got != 0 {
+		t.Fatalf("PUT (zero) response task_budget_usd = %v, want 0", got)
+	}
+
+	// A negative task_budget_usd must be rejected like any other invalid budget.
+	negativeBody := `{"limit_usd":10,"period":"daily","action_on_exceed":"alert","task_budget_usd":-1}`
+	negativeReq := httptest.NewRequest(http.MethodPut, basePath+"/budgets/email-agent", strings.NewReader(negativeBody))
+	addAuthenticatedSessionCookie(t, store, negativeReq)
+	negativeReq.Header.Set("Content-Type", "application/json")
+	negativeRecorder := httptest.NewRecorder()
+	server.ServeHTTP(negativeRecorder, negativeReq)
+	if negativeRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("PUT (negative) status = %d, want %d", negativeRecorder.Code, http.StatusBadRequest)
+	}
+}
+
 func TestServer_KillAndEnableToggleStatus(t *testing.T) {
 	t.Parallel()
 
@@ -1480,18 +1560,30 @@ func TestServer_AgentsEndpointIncludesConfiguredAgentsFromSQLite(t *testing.T) {
 	}
 }
 
+// TestServer_AgentDeleteEndpoint_SucceedsForAnySQLiteAgent proves DELETE
+// /agents/{name} deletes any agent that exists in SQLite and never tells the
+// operator to edit a config file, regardless of how the agent was seeded.
+func TestServer_AgentDeleteEndpoint_SucceedsForAnySQLiteAgent(t *testing.T) {
+	t.Parallel()
+
+	server, _, store := newTestServer(t)
+	req := httptest.NewRequest(http.MethodDelete, basePath+"/agents/email-agent", nil)
+	addAuthenticatedSessionCookie(t, store, req)
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d, body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if strings.Contains(strings.ToLower(recorder.Body.String()), "config") {
+		t.Fatalf("response tells the operator to edit a config file: %s", recorder.Body.String())
+	}
+}
+
 func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store) {
 	t.Helper()
 
 	cfg := config.DefaultConfig()
-	cfg.Gate.Agents = []config.AgentBudgetConfig{
-		{
-			Name:           "email-agent",
-			LimitUSD:       10,
-			Period:         config.BudgetPeriodDaily,
-			ActionOnExceed: config.BudgetActionAlert,
-		},
-	}
 
 	dsn := filepath.Join(t.TempDir(), "oberwatch-api-test.db")
 	sqliteStore, err := storage.NewSQLiteStore(dsn, 0, nil)
@@ -1502,8 +1594,19 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 		_ = sqliteStore.Close()
 	})
 
-	if seedErr := budget.SeedConfiguredAgents(context.Background(), cfg.Gate, sqliteStore, nil); seedErr != nil {
-		t.Fatalf("SeedConfiguredAgents() error = %v", seedErr)
+	now := time.Now().UTC()
+	if err := sqliteStore.UpsertAgent(context.Background(), storage.AgentRecord{
+		Name:            "email-agent",
+		Status:          "active",
+		BudgetLimitUSD:  10,
+		BudgetPeriod:    config.BudgetPeriodDaily,
+		ActionOnExceed:  config.BudgetActionAlert,
+		PeriodStartedAt: now,
+		PeriodResetsAt:  now.Add(24 * time.Hour),
+		FirstSeenAt:     now,
+		LastSeenAt:      now,
+	}); err != nil {
+		t.Fatalf("UpsertAgent() error = %v", err)
 	}
 
 	manager, err := budget.NewPersistentManager(cfg.Gate, nil, sqliteStore)

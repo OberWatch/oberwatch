@@ -65,7 +65,6 @@ func baseGateConfig() config.GateConfig {
 	cfg.Runaway.MaxRequests = 100
 	cfg.Runaway.WindowSeconds = 60
 	cfg.APIKeyMap = []config.APIKeyMapEntry{{APIKeyPrefix: "sk-live-", Agent: "mapped-agent"}}
-	cfg.Agents = nil
 	return cfg
 }
 
@@ -598,164 +597,96 @@ func TestRewriteModelForDowngrade(t *testing.T) {
 	}
 }
 
-func TestSeedConfiguredAgentsAndPersistentFlush(t *testing.T) {
+// TestPersistentManager_FreshBootHasNoAgentsBeforeTraffic proves a fresh
+// install starts with no agents at all: SQLite is the only source of agent
+// records, and nothing seeds one before a request arrives. This mirrors what
+// cmd/oberwatch/main.go does at startup.
+func TestPersistentManager_FreshBootHasNoAgentsBeforeTraffic(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		recordSpend float64
-	}{
-		{name: "seed writes configured agent", recordSpend: 0},
-		{name: "flush persists spend after mutation", recordSpend: 3.25},
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "boot.db"), 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	manager, err := NewPersistentManager(baseGateConfig(), nil, store)
+	if err != nil {
+		t.Fatalf("NewPersistentManager() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = manager.Close()
+	})
+
+	if flushErr := manager.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("Flush() error = %v", flushErr)
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := baseGateConfig()
-			cfg.Agents = []config.AgentBudgetConfig{
-				{
-					Name:           "email-agent",
-					LimitUSD:       12,
-					Period:         config.BudgetPeriodWeekly,
-					ActionOnExceed: config.BudgetActionDowngrade,
-					DowngradeChain: []string{"claude-opus-4-6", "claude-sonnet-4-6"},
-				},
-			}
-
-			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "budget.db"), 0, nil)
-			if err != nil {
-				t.Fatalf("NewSQLiteStore() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = store.Close()
-			})
-
-			if seedErr := SeedConfiguredAgents(context.Background(), cfg, store, nil); seedErr != nil {
-				t.Fatalf("SeedConfiguredAgents() error = %v", seedErr)
-			}
-
-			record, found, err := store.GetAgent(context.Background(), "email-agent")
-			if err != nil {
-				t.Fatalf("GetAgent() error = %v", err)
-			}
-			if !found {
-				t.Fatal("GetAgent() found = false, want true")
-			}
-			if record.BudgetLimitUSD != 12 {
-				t.Fatalf("BudgetLimitUSD = %v, want 12", record.BudgetLimitUSD)
-			}
-			if record.BudgetPeriod != config.BudgetPeriodWeekly {
-				t.Fatalf("BudgetPeriod = %q, want %q", record.BudgetPeriod, config.BudgetPeriodWeekly)
-			}
-
-			manager, err := NewPersistentManager(cfg, nil, store)
-			if err != nil {
-				t.Fatalf("NewPersistentManager() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = manager.Close()
-			})
-
-			if tt.recordSpend > 0 {
-				manager.RecordSpend("email-agent", tt.recordSpend)
-				if flushErr := manager.Flush(context.Background()); flushErr != nil {
-					t.Fatalf("Flush() error = %v", flushErr)
-				}
-
-				record, found, err = store.GetAgent(context.Background(), "email-agent")
-				if err != nil {
-					t.Fatalf("GetAgent(after flush) error = %v", err)
-				}
-				if !found {
-					t.Fatal("GetAgent(after flush) found = false, want true")
-				}
-				if record.BudgetSpentUSD != tt.recordSpend {
-					t.Fatalf("BudgetSpentUSD = %v, want %v", record.BudgetSpentUSD, tt.recordSpend)
-				}
-			}
-		})
+	agents, err := store.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("ListAgents() = %#v, want empty on a fresh boot with no traffic", agents)
 	}
 }
 
-func TestNewPersistentManager_DoesNotPersistConfiguredAgentsWithoutTraffic(t *testing.T) {
+// TestPersistentManager_TrafficDiscoversAndPersistsAgent proves the first
+// proxied request for a new agent name is what creates its SQLite row, under
+// the gate-level default budget policy since nothing configures the agent
+// ahead of time.
+func TestPersistentManager_TrafficDiscoversAndPersistsAgent(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		agentName string
-	}{
-		{
-			name:      "configured agent stays absent until first traffic",
-			agentName: "email-agent",
-		},
+	cfg := baseGateConfig()
+	cfg.DefaultBudget.LimitUSD = 12
+	cfg.DefaultBudget.Period = config.BudgetPeriodWeekly
+
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "budget.db"), 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	manager, err := NewPersistentManager(cfg, nil, store)
+	if err != nil {
+		t.Fatalf("NewPersistentManager() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = manager.Close()
+	})
+
+	if flushErr := manager.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("Flush() error = %v", flushErr)
+	}
+	if _, found, err := store.GetAgent(context.Background(), "email-agent"); err != nil || found {
+		t.Fatalf("GetAgent(email-agent) before traffic = found %v, err %v; want absent", found, err)
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	manager.RecordSpend("email-agent", 1.25)
+	if flushErr := manager.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("Flush(after traffic) error = %v", flushErr)
+	}
 
-			cfg := baseGateConfig()
-			cfg.Agents = []config.AgentBudgetConfig{
-				{
-					Name:           tt.agentName,
-					LimitUSD:       12,
-					Period:         config.BudgetPeriodWeekly,
-					ActionOnExceed: config.BudgetActionDowngrade,
-					DowngradeChain: []string{"claude-opus-4-6", "claude-sonnet-4-6"},
-				},
-			}
-
-			store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "budget.db"), 0, nil)
-			if err != nil {
-				t.Fatalf("NewSQLiteStore() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = store.Close()
-			})
-
-			manager, err := NewPersistentManager(cfg, nil, store)
-			if err != nil {
-				t.Fatalf("NewPersistentManager() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = manager.Close()
-			})
-
-			if flushErr := manager.Flush(context.Background()); flushErr != nil {
-				t.Fatalf("Flush() error = %v", flushErr)
-			}
-
-			record, found, err := store.GetAgent(context.Background(), tt.agentName)
-			if err != nil {
-				t.Fatalf("GetAgent() error = %v", err)
-			}
-			if found {
-				t.Fatalf("GetAgent() found = true, want false, record = %#v", record)
-			}
-
-			manager.RecordSpend(tt.agentName, 1.25)
-			if flushErr := manager.Flush(context.Background()); flushErr != nil {
-				t.Fatalf("Flush(after traffic) error = %v", flushErr)
-			}
-
-			record, found, err = store.GetAgent(context.Background(), tt.agentName)
-			if err != nil {
-				t.Fatalf("GetAgent(after traffic) error = %v", err)
-			}
-			if !found {
-				t.Fatal("GetAgent(after traffic) found = false, want true")
-			}
-			if record.BudgetLimitUSD != 12 {
-				t.Fatalf("BudgetLimitUSD = %v, want 12", record.BudgetLimitUSD)
-			}
-			if record.BudgetSpentUSD != 1.25 {
-				t.Fatalf("BudgetSpentUSD = %v, want 1.25", record.BudgetSpentUSD)
-			}
-		})
+	record, found, err := store.GetAgent(context.Background(), "email-agent")
+	if err != nil {
+		t.Fatalf("GetAgent(after traffic) error = %v", err)
+	}
+	if !found {
+		t.Fatal("GetAgent(after traffic) found = false, want true")
+	}
+	if record.BudgetLimitUSD != 12 {
+		t.Fatalf("BudgetLimitUSD = %v, want the gate default 12", record.BudgetLimitUSD)
+	}
+	if record.BudgetPeriod != config.BudgetPeriodWeekly {
+		t.Fatalf("BudgetPeriod = %q, want %q", record.BudgetPeriod, config.BudgetPeriodWeekly)
+	}
+	if record.BudgetSpentUSD != 1.25 {
+		t.Fatalf("BudgetSpentUSD = %v, want 1.25", record.BudgetSpentUSD)
 	}
 }
 
@@ -966,18 +897,17 @@ func TestNewManagerWithClockNilAndAgentOverridePolicy(t *testing.T) {
 
 	cfg := baseGateConfig()
 	cfg.DefaultBudget.LimitUSD = 100
-	cfg.Agents = []config.AgentBudgetConfig{
-		{
-			Name:           "agent-override",
-			LimitUSD:       1,
-			Period:         config.BudgetPeriodDaily,
-			ActionOnExceed: config.BudgetActionReject,
-		},
-	}
 
 	manager := NewManagerWithClock(cfg, nil, nil)
 	if manager == nil {
 		t.Fatal("NewManagerWithClock(nil clock) returned nil")
+	}
+	if err := manager.UpdateBudget("agent-override", BudgetUpdate{
+		LimitUSD:       1,
+		Period:         config.BudgetPeriodDaily,
+		ActionOnExceed: config.BudgetActionReject,
+	}); err != nil {
+		t.Fatalf("UpdateBudget(agent-override) error = %v", err)
 	}
 
 	manager.RecordSpend("agent-override", 1)
@@ -1458,18 +1388,11 @@ func TestBudgetViewsAndMutations(t *testing.T) {
 	start := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
 	clock := newMockClock(start)
 	cfg := baseGateConfig()
-	cfg.Agents = []config.AgentBudgetConfig{
-		{
-			Name:           "configured-agent",
-			LimitUSD:       20,
-			Period:         config.BudgetPeriodWeekly,
-			ActionOnExceed: config.BudgetActionAlert,
-		},
-	}
 	manager := NewManagerWithClock(cfg, nil, clock)
 
 	manager.RecordSpend("agent-a", 3)
 	manager.KillAgent("agent-b")
+	manager.RecordSpend("agent-c", 0)
 
 	views := manager.ListBudgets()
 	if len(views) < 3 {

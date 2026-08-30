@@ -213,7 +213,7 @@ limit_usd = 500
 period = "monthly"
 
 [gate.default_budget]
-# Default per-agent budget if no explicit [[gate.agents]] override exists.
+# Default per-agent budget for agents without a dashboard-set override.
 # Use 0 for "unlimited".
 limit_usd = 25
 
@@ -239,14 +239,6 @@ window_seconds = 60
 # Agent identity source.
 # Valid values: header, api_key, source_ip
 method = "header"
-
-# Uncomment and adapt a per-agent policy when you are ready to enforce one.
-# [[gate.agents]]
-# name = "my-agent"
-# limit_usd = 10.00
-# period = "daily"
-# action_on_exceed = "downgrade"
-# downgrade_chain = ["claude-sonnet-5", "claude-haiku-4-5"]
 
 # Optional API key prefix-to-agent mapping when identification.method = "api_key".
 # [[gate.api_key_map]]

@@ -665,9 +665,6 @@ func TestInstallerDefaultConfigHasNoInventedAgents(t *testing.T) {
 	if err := config.Validate(cfg); err != nil {
 		t.Fatalf("config.Validate() error = %v", err)
 	}
-	if len(cfg.Gate.Agents) != 0 {
-		t.Fatalf("installer default config declares %d gate.agents, want 0 on a fresh install", len(cfg.Gate.Agents))
-	}
 	if len(cfg.Gate.APIKeyMap) != 0 {
 		t.Fatalf("installer default config declares %d gate.api_key_map entries, want 0", len(cfg.Gate.APIKeyMap))
 	}

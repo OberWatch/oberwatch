@@ -138,21 +138,6 @@ func TestDeleteAgent(t *testing.T) {
 			target:  "  ",
 			wantErr: storage.ErrAgentNotFound,
 		},
-		{
-			name:    "configured agent is protected",
-			target:  "configured-agent",
-			wantErr: ErrAgentProtected,
-			prepare: func(t *testing.T, manager *BudgetManager) {
-				t.Helper()
-				manager.RecordSpend("configured-agent", 1)
-			},
-			assert: func(t *testing.T, manager *BudgetManager, _ *storage.SQLiteStore) {
-				t.Helper()
-				if view := manager.GetBudget("configured-agent"); view.SpentUSD != 1 {
-					t.Fatalf("protected agent spent = %v, want untouched 1", view.SpentUSD)
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -161,9 +146,6 @@ func TestDeleteAgent(t *testing.T) {
 			t.Parallel()
 
 			gate := baseGateConfig()
-			gate.Agents = []config.AgentBudgetConfig{{
-				Name: "configured-agent", LimitUSD: 5, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert,
-			}}
 			manager, store := newDeleteFixture(t, gate)
 			if tt.prepare != nil {
 				tt.prepare(t, manager)

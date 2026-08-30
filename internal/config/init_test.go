@@ -99,14 +99,11 @@ func TestStarterTOML_HasNoExampleAgentPolicies(t *testing.T) {
 	if _, err := toml.Decode(StarterTOML, &cfg); err != nil {
 		t.Fatalf("toml.Decode() error = %v", err)
 	}
-	if len(cfg.Gate.Agents) != 0 {
-		t.Fatalf("StarterTOML declares %d gate.agents, want 0 on a fresh install", len(cfg.Gate.Agents))
-	}
 	if len(cfg.Gate.APIKeyMap) != 0 {
 		t.Fatalf("StarterTOML declares %d gate.api_key_map entries, want 0 on a fresh install", len(cfg.Gate.APIKeyMap))
 	}
 
-	for _, name := range exampleAgentNames {
+	for _, name := range []string{"email-agent", "finance-agent"} {
 		if strings.Contains(StarterTOML, name) {
 			t.Fatalf("StarterTOML still mentions the invented agent %q", name)
 		}

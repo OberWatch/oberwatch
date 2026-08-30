@@ -228,12 +228,10 @@ storage = "sqlite"
 enabled = true
 task_budget_usd = ${TASK_LIMIT}
 
-[[gate.agents]]
-name             = "${TIGHT_AGENT}"
+[gate.default_budget]
 limit_usd        = 100.00
 period           = "daily"
 action_on_exceed = "alert"
-task_budget_usd  = ${TIGHT_TASK_LIMIT}
 
 [[pricing]]
 model              = "gpt-4o"
@@ -294,6 +292,13 @@ SETUP_CODE=$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" -X POST "${API}
   -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\",\"confirm_password\":\"${ADMIN_PASS}\"}")
 [ "$SETUP_CODE" = "200" ] || [ "$SETUP_CODE" = "201" ] || fail "setup returned HTTP $SETUP_CODE"
 login
+
+echo "==> Setting the SQLite-backed task-budget override for ${TIGHT_AGENT}..."
+TIGHT_BUDGET_CODE=$(curl -s --max-time 5 -o "$RESP" -w "%{http_code}" -b "$COOKIES" \
+  -X PUT "${API}/budgets/${TIGHT_AGENT}" \
+  -H "Content-Type: application/json" \
+  -d "{\"limit_usd\":100.00,\"period\":\"daily\",\"action_on_exceed\":\"alert\",\"task_budget_usd\":${TIGHT_TASK_LIMIT}}")
+[ "$TIGHT_BUDGET_CODE" = "200" ] || fail "task-budget override update returned HTTP $TIGHT_BUDGET_CODE: $(cat "$RESP")"
 
 api_get() {
   curl -sf --max-time 5 -b "$COOKIES" "${API}$1"

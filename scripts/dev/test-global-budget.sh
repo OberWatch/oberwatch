@@ -15,8 +15,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Building oberwatch..."
-PATH=/usr/local/go/bin:$PATH GOCACHE=/tmp/go-build \
-  /usr/local/go/bin/go build -o "$BINARY" ./cmd/oberwatch
+go build -o "$BINARY" ./cmd/oberwatch
 
 cat > "$CONFIG" <<EOF
 [server]
@@ -33,21 +32,14 @@ storage = "sqlite"
 [gate]
 enabled = true
 
+[gate.default_budget]
+limit_usd       = 100.00
+period          = "daily"
+action_on_exceed = "reject"
+
 [gate.global_budget]
 limit_usd = 0.10
 period    = "daily"
-
-[[gate.agents]]
-name            = "alice"
-limit_usd       = 100.00
-period          = "daily"
-action_on_exceed = "reject"
-
-[[gate.agents]]
-name            = "bob"
-limit_usd       = 100.00
-period          = "daily"
-action_on_exceed = "reject"
 
 [[pricing]]
 model               = "gpt-4o"

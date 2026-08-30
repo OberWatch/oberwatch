@@ -35,27 +35,9 @@ func TestTaskBudget_Validation(t *testing.T) {
 			wantSubstr: "gate.task_budget_usd must be non-negative",
 		},
 		{
-			name: "agent task budget must be non-negative",
-			mutate: func(cfg *Config) {
-				cfg.Gate.Agents = []AgentBudgetConfig{{
-					Name:           "agent-a",
-					Period:         BudgetPeriodDaily,
-					ActionOnExceed: BudgetActionAlert,
-					TaskBudgetUSD:  -1,
-				}}
-			},
-			wantSubstr: "gate.agents[0].task_budget_usd must be non-negative",
-		},
-		{
 			name: "zero and positive values are valid",
 			mutate: func(cfg *Config) {
 				cfg.Gate.TaskBudgetUSD = 5
-				cfg.Gate.Agents = []AgentBudgetConfig{{
-					Name:           "agent-a",
-					Period:         BudgetPeriodDaily,
-					ActionOnExceed: BudgetActionAlert,
-					TaskBudgetUSD:  0,
-				}}
 			},
 		},
 	}
@@ -88,22 +70,12 @@ func TestTaskBudget_TOMLAndEnvOverride(t *testing.T) {
 	snippet := `
 [gate]
 task_budget_usd = 2.5
-
-[[gate.agents]]
-name = "research-agent"
-limit_usd = 10
-period = "daily"
-action_on_exceed = "alert"
-task_budget_usd = 0.75
 `
 	if _, err := toml.Decode(snippet, &cfg); err != nil {
 		t.Fatalf("toml.Decode() error = %v", err)
 	}
 	if cfg.Gate.TaskBudgetUSD != 2.5 {
 		t.Fatalf("Gate.TaskBudgetUSD = %v, want 2.5", cfg.Gate.TaskBudgetUSD)
-	}
-	if len(cfg.Gate.Agents) != 1 || cfg.Gate.Agents[0].TaskBudgetUSD != 0.75 {
-		t.Fatalf("Gate.Agents = %#v, want one agent with task_budget_usd 0.75", cfg.Gate.Agents)
 	}
 
 	if err := applyEnvOverrides(&cfg, []string{"OBERWATCH_GATE__TASK_BUDGET_USD=4"}); err != nil {

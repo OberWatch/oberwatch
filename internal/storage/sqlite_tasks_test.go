@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/OberWatch/oberwatch/internal/config"
 )
 
 func TestSQLiteStore_TaskBudgetsMigration(t *testing.T) {
@@ -26,12 +28,15 @@ func TestSQLiteStore_TaskBudgetsMigration(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT version FROM schema_migrations LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if currentSchemaVersion != 4 || version != 4 {
-		t.Fatalf("schema version = %d (current %d), want 4", version, currentSchemaVersion)
+	if currentSchemaVersion != 5 || version != 5 {
+		t.Fatalf("schema version = %d (current %d), want 5", version, currentSchemaVersion)
 	}
 
-	// Roll the database back to the v3 shape and reopen it so the v4 migration
-	// runs against an existing installation rather than a fresh file.
+	// Roll the database back to the v3 shape and reopen it so the v4 and v5
+	// migrations run against an existing installation rather than a fresh file.
+	if _, err := store.db.ExecContext(ctx, "ALTER TABLE agents DROP COLUMN task_budget_usd"); err != nil {
+		t.Fatalf("drop agents.task_budget_usd: %v", err)
+	}
 	if _, err := store.db.ExecContext(ctx, "DROP TABLE task_budgets"); err != nil {
 		t.Fatalf("drop task_budgets: %v", err)
 	}
@@ -69,8 +74,99 @@ func TestSQLiteStore_TaskBudgetsMigration(t *testing.T) {
 	if err := reopened.db.QueryRowContext(ctx, "SELECT version FROM schema_migrations LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read schema version after reopen: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("schema version after reopen = %d, want 4", version)
+	if version != 5 {
+		t.Fatalf("schema version after reopen = %d, want 5", version)
+	}
+}
+
+// TestSQLiteStore_AgentTaskBudgetSurvivesMigration proves the v5 migration
+// that adds agents.task_budget_usd is additive: an agent row written before
+// the column existed keeps every other field intact, gains task_budget_usd=0
+// (inheriting the gate default), and the column can be set and persisted
+// afterward.
+func TestSQLiteStore_AgentTaskBudgetSurvivesMigration(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "agent-task-budget-migration.db")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	store, openErr := NewSQLiteStore(dsn, 0, logger)
+	if openErr != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", openErr)
+	}
+
+	seeded := time.Date(2026, time.August, 27, 9, 0, 0, 0, time.UTC)
+	if err := store.UpsertAgent(ctx, AgentRecord{
+		Name:           "legacy-agent",
+		Status:         "active",
+		BudgetLimitUSD: 25,
+		BudgetSpentUSD: 4.5,
+		BudgetPeriod:   config.BudgetPeriodDaily,
+		ActionOnExceed: config.BudgetActionAlert,
+		FirstSeenAt:    seeded,
+		LastSeenAt:     seeded,
+	}); err != nil {
+		t.Fatalf("UpsertAgent() error = %v", err)
+	}
+
+	// Roll the database back to the v4 shape (no task_budget_usd column) and
+	// reopen it so the v5 migration runs against an existing installation
+	// with a real agent row already in it.
+	if _, err := store.db.ExecContext(ctx, "ALTER TABLE agents DROP COLUMN task_budget_usd"); err != nil {
+		t.Fatalf("drop agents.task_budget_usd: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE schema_migrations SET version = 4"); err != nil {
+		t.Fatalf("downgrade schema version: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dsn, 0, logger)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) error = %v", err)
+	}
+
+	record, found, err := reopened.GetAgent(ctx, "legacy-agent")
+	if err != nil {
+		t.Fatalf("GetAgent() error = %v", err)
+	}
+	if !found {
+		t.Fatal("GetAgent() found = false, want the pre-migration row to survive")
+	}
+	if record.BudgetLimitUSD != 25 || record.BudgetSpentUSD != 4.5 {
+		t.Fatalf("record = %#v, want the pre-migration budget fields untouched", record)
+	}
+	if record.TaskBudgetUSD != 0 {
+		t.Fatalf("TaskBudgetUSD = %v, want 0 (inherits the gate default) for a row migrated without one", record.TaskBudgetUSD)
+	}
+
+	record.TaskBudgetUSD = 3.5
+	if err := reopened.UpsertAgent(ctx, record); err != nil {
+		t.Fatalf("UpsertAgent(after migration) error = %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := NewSQLiteStore(dsn, 0, logger)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(restart) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = restarted.Close()
+	})
+
+	record, found, err = restarted.GetAgent(ctx, "legacy-agent")
+	if err != nil {
+		t.Fatalf("GetAgent(after restart) error = %v", err)
+	}
+	if !found {
+		t.Fatal("GetAgent(after restart) found = false, want true")
+	}
+	if record.TaskBudgetUSD != 3.5 {
+		t.Fatalf("TaskBudgetUSD after restart = %v, want 3.5", record.TaskBudgetUSD)
 	}
 }
 

@@ -208,11 +208,16 @@ func TestReserveTask_PerAgentTaskLimitIsPreferred(t *testing.T) {
 	t.Parallel()
 
 	cfg := taskGateConfig(1)
-	cfg.Agents = []config.AgentBudgetConfig{
-		{Name: "premium-agent", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 5},
-		{Name: "inherit-agent", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 0},
-	}
 	manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)))
+
+	premiumTaskLimit := 5.0
+	if err := manager.UpdateBudget("premium-agent", BudgetUpdate{LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: &premiumTaskLimit}); err != nil {
+		t.Fatalf("UpdateBudget(premium-agent) error = %v", err)
+	}
+	inheritTaskLimit := 0.0
+	if err := manager.UpdateBudget("inherit-agent", BudgetUpdate{LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: &inheritTaskLimit}); err != nil {
+		t.Fatalf("UpdateBudget(inherit-agent) error = %v", err)
+	}
 
 	if got := manager.TaskLimitUSD("premium-agent"); got != 5 {
 		t.Fatalf("TaskLimitUSD(premium-agent) = %v, want 5", got)
@@ -366,10 +371,12 @@ func TestTaskView_ReportsTheCurrentlyEnforcedLimit(t *testing.T) {
 
 	// The gate does not cap tasks; only premium-agent does.
 	cfg := taskGateConfig(0)
-	cfg.Agents = []config.AgentBudgetConfig{
-		{Name: "premium-agent", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 1},
-	}
 	manager := NewManagerWithClock(cfg, nil, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)))
+
+	premiumTaskLimit := 1.0
+	if err := manager.UpdateBudget("premium-agent", BudgetUpdate{LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: &premiumTaskLimit}); err != nil {
+		t.Fatalf("UpdateBudget(premium-agent) error = %v", err)
+	}
 
 	_, reservation := manager.ReserveTask("premium-agent", "task-1", 1)
 	reservation.Settle(1)
@@ -400,9 +407,6 @@ func TestRenameAgent_CarriesPerAgentTaskLimit(t *testing.T) {
 	t.Parallel()
 
 	cfg := taskGateConfig(10)
-	cfg.Agents = []config.AgentBudgetConfig{
-		{Name: "research", LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: 1},
-	}
 	store := newTaskStore(t)
 	ctx := context.Background()
 	manager, newErr := NewPersistentManagerWithClockAndDispatcher(cfg, nil, store, newMockClock(time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)), nil)
@@ -415,6 +419,10 @@ func TestRenameAgent_CarriesPerAgentTaskLimit(t *testing.T) {
 
 	// The agent has to exist in the store before it can be renamed.
 	manager.RecordSpend("research", 1)
+	researchTaskLimit := 1.0
+	if err := manager.UpdateBudget("research", BudgetUpdate{LimitUSD: 50, Period: config.BudgetPeriodDaily, ActionOnExceed: config.BudgetActionAlert, TaskBudgetUSD: &researchTaskLimit}); err != nil {
+		t.Fatalf("UpdateBudget(research) error = %v", err)
+	}
 	if err := manager.Flush(ctx); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
