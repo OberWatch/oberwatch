@@ -71,12 +71,23 @@ type Stats struct {
 	QueueCapacity int
 }
 
+type destinationSecrets struct {
+	values []string
+}
+
 type destination struct {
-	secrets  []string
 	kind     string
 	url      string
 	redacted string
+	secrets  *destinationSecrets
 	smtp     *smtpDestConfig
+}
+
+func (d destination) secretValues() []string {
+	if d.secrets == nil {
+		return nil
+	}
+	return d.secrets.values
 }
 
 //nolint:govet // field grouping is deliberate.
@@ -224,7 +235,7 @@ func newDestination(kind string, rawURL string) destination {
 		kind:     kind,
 		url:      rawURL,
 		redacted: RedactURL(rawURL),
-		secrets:  urlSecrets(rawURL),
+		secrets:  &destinationSecrets{values: urlSecrets(rawURL)},
 	}
 }
 
@@ -510,7 +521,7 @@ func sanitizeError(err error, dest destination) error {
 	case errors.Is(err, context.Canceled):
 		return context.Canceled
 	default:
-		return errors.New(redactText(err.Error(), dest.secrets))
+		return errors.New(redactText(err.Error(), dest.secretValues()))
 	}
 }
 
@@ -529,7 +540,7 @@ func readErrorSnippet(body io.Reader, dest destination) string {
 		}
 		return r
 	}, snippet)
-	return redactText(snippet, dest.secrets)
+	return redactText(snippet, dest.secretValues())
 }
 
 func encodePayload(kind string, event Alert) ([]byte, error) {
@@ -658,7 +669,7 @@ func (d *AlertDispatcher) logWarn(message string, err error, dest destination, e
 	}
 	errText := ""
 	if err != nil {
-		errText = redactText(err.Error(), dest.secrets)
+		errText = redactText(err.Error(), dest.secretValues())
 	}
 	args := []any{
 		"error", errText,

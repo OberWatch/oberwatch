@@ -69,7 +69,7 @@ func buildSMTPDestination(email config.EmailConfig) (destination, error) {
 	return destination{
 		kind:     KindEmail,
 		redacted: fmt.Sprintf("smtp://%s:%d", email.SMTPHost, email.SMTPPort),
-		secrets:  secrets,
+		secrets:  &destinationSecrets{values: secrets},
 		smtp: &smtpDestConfig{
 			host:         email.SMTPHost,
 			port:         email.SMTPPort,
