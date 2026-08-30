@@ -1,5 +1,13 @@
 <script lang="ts">
   import { fetchJSON } from '$lib/api';
+  import {
+    alertSettingsToFormState,
+    buildAlertSettingsPatch,
+    clearSecretPatch,
+    hasAlertSettingsChanges,
+    secretStatusLabel,
+    type AlertSettingsFormState
+  } from '$lib/alertSettings';
   import { DataTable, ErrorState, SkeletonTable, StatusBadge } from '$lib/components';
   import { loadPhase } from '$lib/loadState';
   import {
@@ -9,7 +17,12 @@
     providerObservedAt,
     providerStatusLabel
   } from '$lib/providerStatus';
-  import type { HealthResponse, PricingResponse, ProviderStatus } from '$lib/types';
+  import type {
+    AlertSettingsResponse,
+    HealthResponse,
+    PricingResponse,
+    ProviderStatus
+  } from '$lib/types';
   import { onMount, type Snippet } from 'svelte';
 
   type RowData = Record<string, string | number | boolean | null | undefined>;
@@ -46,6 +59,23 @@
   let currentPassword = $state('');
   let newPassword = $state('');
   let confirmPassword = $state('');
+
+  let alertSettingsWarning = $state<string | null>(null);
+  let alertSaveError = $state<string | null>(null);
+  let alertSaveSuccess = $state<string | null>(null);
+  let lastAlertSettings = $state<AlertSettingsResponse | null>(null);
+  let smtpPasswordIsSet = $state(false);
+  let webhookIsSet = $state(false);
+  let slackIsSet = $state(false);
+  let smtpEnabled = $state(false);
+  let smtpHost = $state('');
+  let smtpPort = $state('');
+  let smtpUser = $state('');
+  let smtpFrom = $state('');
+  let smtpToText = $state('');
+  let smtpPasswordInput = $state('');
+  let webhookInput = $state('');
+  let slackInput = $state('');
 
   // Not reactive: nothing renders it. It only keeps the interval from starting a
   // second /health read while one is still outstanding.
@@ -105,7 +135,95 @@
     }
 
     loading = false;
-    await loadPricing();
+    await Promise.all([loadPricing(), loadAlertSettings()]);
+  }
+
+  function applyAlertSettings(data: AlertSettingsResponse): void {
+    lastAlertSettings = data;
+    smtpPasswordIsSet = data.smtp_password_is_set;
+    webhookIsSet = data.webhook_url_is_set;
+    slackIsSet = data.slack_webhook_url_is_set;
+    const form = alertSettingsToFormState(data);
+    smtpEnabled = form.smtpEnabled;
+    smtpHost = form.smtpHost;
+    smtpPort = form.smtpPort;
+    smtpUser = form.smtpUser;
+    smtpFrom = form.smtpFrom;
+    smtpToText = form.smtpToText;
+    smtpPasswordInput = form.smtpPasswordInput;
+    webhookInput = form.webhookInput;
+    slackInput = form.slackInput;
+  }
+
+  /**
+   * loadAlertSettings is split out from loadSettings, the same way loadPricing
+   * is, so a delivery-settings failure never touches the page-wide `loading`
+   * flag or replaces the page with ErrorState — that would unmount the
+   * password form the user might already be filling in.
+   */
+  async function loadAlertSettings(): Promise<void> {
+    alertSettingsWarning = null;
+
+    try {
+      applyAlertSettings(await fetchJSON<AlertSettingsResponse>('/settings/alerts'));
+    } catch (err) {
+      alertSettingsWarning =
+        err instanceof Error ? err.message : 'Alert delivery settings unavailable.';
+    }
+  }
+
+  async function saveAlertSettings(): Promise<void> {
+    alertSaveError = null;
+    alertSaveSuccess = null;
+    if (!lastAlertSettings) return;
+
+    const form: AlertSettingsFormState = {
+      smtpEnabled,
+      smtpHost,
+      smtpPort,
+      smtpUser,
+      smtpFrom,
+      smtpToText,
+      smtpPasswordInput,
+      webhookInput,
+      slackInput
+    };
+    const patch = buildAlertSettingsPatch(lastAlertSettings, form);
+    if (!hasAlertSettingsChanges(patch)) {
+      alertSaveSuccess = 'No changes to save.';
+      return;
+    }
+
+    try {
+      applyAlertSettings(
+        await fetchJSON<AlertSettingsResponse>('/settings/alerts', {
+          method: 'PATCH',
+          body: JSON.stringify(patch)
+        })
+      );
+      alertSaveSuccess = 'Alert delivery settings saved. Changes apply immediately, no restart needed.';
+    } catch (err) {
+      alertSaveError = err instanceof Error ? err.message : 'Failed to save alert delivery settings.';
+    }
+  }
+
+  async function clearAlertSecret(
+    field: 'smtp_password' | 'webhook_url' | 'slack_webhook_url'
+  ): Promise<void> {
+    alertSaveError = null;
+    alertSaveSuccess = null;
+
+    try {
+      applyAlertSettings(
+        await fetchJSON<AlertSettingsResponse>('/settings/alerts', {
+          method: 'PATCH',
+          body: JSON.stringify(clearSecretPatch(field))
+        })
+      );
+      alertSaveSuccess = 'Alert delivery settings saved. Changes apply immediately, no restart needed.';
+    } catch (err) {
+      alertSaveError = err instanceof Error ? err.message : 'Failed to clear that secret.';
+    }
   }
 
   /**
@@ -289,6 +407,164 @@
           <DataTable columns={pricingColumns} rows={pricingRows} cellRenderers={pricingRenderers} />
         </div>
       {/if}
+    </section>
+
+    <section class="rounded-lg border border-border-default bg-surface p-4">
+      <h2 class="text-lg font-semibold text-text-primary">Alert delivery</h2>
+      <p class="mt-1 text-sm text-text-secondary">
+        Changes apply immediately — no restart needed.
+      </p>
+      {#if alertSettingsWarning}
+        <div
+          role="status"
+          class="mt-2 flex items-center justify-between gap-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2"
+        >
+          <p class="text-sm text-warning">{alertSettingsWarning}</p>
+          <button
+            type="button"
+            class="rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-accent hover:text-white"
+            onclick={loadAlertSettings}
+          >
+            Retry
+          </button>
+        </div>
+      {/if}
+      <form
+        class="mt-3"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void saveAlertSettings();
+        }}
+      >
+        <label class="flex items-center gap-2">
+          <input type="checkbox" bind:checked={smtpEnabled} class="h-4 w-4" />
+          <span class="text-sm text-text-primary">SMTP enabled</span>
+        </label>
+
+        <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">SMTP host</span>
+            <input
+              bind:value={smtpHost}
+              type="text"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">SMTP port</span>
+            <input
+              bind:value={smtpPort}
+              type="text"
+              inputmode="numeric"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">SMTP username</span>
+            <input
+              bind:value={smtpUser}
+              type="text"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">From address</span>
+            <input
+              bind:value={smtpFrom}
+              type="text"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1 md:col-span-2">
+            <span class="text-xs uppercase tracking-wide text-text-secondary"
+              >Recipients (comma-separated)</span
+            >
+            <input
+              bind:value={smtpToText}
+              type="text"
+              class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+            />
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">
+              SMTP password
+              <span class="ml-1 normal-case text-text-muted">({secretStatusLabel(smtpPasswordIsSet)})</span>
+            </span>
+            <div class="flex gap-2">
+              <input
+                bind:value={smtpPasswordInput}
+                type="password"
+                autocomplete="new-password"
+                placeholder="Leave blank to keep unchanged"
+                class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+              />
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-accent hover:text-white"
+                onclick={() => clearAlertSecret('smtp_password')}
+              >
+                Clear
+              </button>
+            </div>
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">
+              Webhook URL
+              <span class="ml-1 normal-case text-text-muted">({secretStatusLabel(webhookIsSet)})</span>
+            </span>
+            <div class="flex gap-2">
+              <input
+                bind:value={webhookInput}
+                type="password"
+                autocomplete="new-password"
+                placeholder="Leave blank to keep unchanged"
+                class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+              />
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-accent hover:text-white"
+                onclick={() => clearAlertSecret('webhook_url')}
+              >
+                Clear
+              </button>
+            </div>
+          </label>
+          <label class="space-y-1">
+            <span class="text-xs uppercase tracking-wide text-text-secondary">
+              Slack webhook URL
+              <span class="ml-1 normal-case text-text-muted">({secretStatusLabel(slackIsSet)})</span>
+            </span>
+            <div class="flex gap-2">
+              <input
+                bind:value={slackInput}
+                type="password"
+                autocomplete="new-password"
+                placeholder="Leave blank to keep unchanged"
+                class="w-full rounded-md border border-border-default bg-elevated px-3 py-2 text-sm text-text-primary outline-none ring-0"
+              />
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-accent hover:text-white"
+                onclick={() => clearAlertSecret('slack_webhook_url')}
+              >
+                Clear
+              </button>
+            </div>
+          </label>
+        </div>
+        {#if alertSaveError}
+          <p class="mt-3 text-sm text-danger">{alertSaveError}</p>
+        {/if}
+        {#if alertSaveSuccess}
+          <p class="mt-3 text-sm text-success">{alertSaveSuccess}</p>
+        {/if}
+        <button
+          type="submit"
+          class="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover"
+        >
+          Save alert delivery settings
+        </button>
+      </form>
     </section>
 
     <section class="rounded-lg border border-border-default bg-surface p-4">

@@ -3,6 +3,7 @@ package alert
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,7 @@ const (
 const (
 	KindWebhook = "webhook"
 	KindSlack   = "slack"
+	KindEmail   = "email"
 )
 
 // Options configures an AlertDispatcher. Zero values fall back to the defaults above.
@@ -69,11 +71,30 @@ type Stats struct {
 	QueueCapacity int
 }
 
+type destinationDetails struct {
+	smtp    *smtpDestConfig
+	secrets []string
+}
+
 type destination struct {
+	details  *destinationDetails
 	kind     string
 	url      string
 	redacted string
-	secrets  []string
+}
+
+func (d destination) secretValues() []string {
+	if d.details == nil {
+		return nil
+	}
+	return d.details.secrets
+}
+
+func (d destination) smtpConfig() *smtpDestConfig {
+	if d.details == nil {
+		return nil
+	}
+	return d.details.smtp
 }
 
 //nolint:govet // field grouping is deliberate.
@@ -91,9 +112,18 @@ type AlertDispatcher struct {
 	httpClient     *http.Client
 	logger         *slog.Logger
 	clock          Clock
-	destinations   []destination
 	attemptTimeout time.Duration
 	backoffBase    time.Duration
+
+	destMu       sync.RWMutex
+	destinations []destination
+
+	// smtpTLSConfig and smtpImplicitTLS are test-only overrides (nil in
+	// production) that let this package's tests exercise STARTTLS and
+	// implicit TLS against a local fake server with a self-signed
+	// certificate and a non-standard port.
+	smtpTLSConfig   func(host string) *tls.Config
+	smtpImplicitTLS func(port int) bool
 
 	queue  chan job
 	ctx    context.Context
@@ -197,6 +227,13 @@ func buildDestinations(cfg config.AlertsConfig) ([]destination, error) {
 		}
 		destinations = append(destinations, newDestination(KindSlack, slackURL))
 	}
+	if cfg.Email.Enabled {
+		dest, err := buildSMTPDestination(cfg.Email)
+		if err != nil {
+			return nil, err
+		}
+		destinations = append(destinations, dest)
+	}
 	return destinations, nil
 }
 
@@ -205,21 +242,25 @@ func newDestination(kind string, rawURL string) destination {
 		kind:     kind,
 		url:      rawURL,
 		redacted: RedactURL(rawURL),
-		secrets:  urlSecrets(rawURL),
+		details:  &destinationDetails{secrets: urlSecrets(rawURL)},
 	}
 }
 
 // Dispatch queues the alert for delivery to every configured destination and
 // returns immediately. When the queue is full the alert is dropped and counted.
 func (d *AlertDispatcher) Dispatch(_ context.Context, event Alert) {
-	if d == nil || len(d.destinations) == 0 {
+	if d == nil {
+		return
+	}
+	destinations := d.currentDestinations()
+	if len(destinations) == 0 {
 		return
 	}
 	if d.shouldSuppress(event) {
 		return
 	}
 
-	for _, dest := range d.destinations {
+	for _, dest := range destinations {
 		body, err := encodePayload(dest.kind, event)
 		if err != nil {
 			d.failed.Add(1)
@@ -228,6 +269,32 @@ func (d *AlertDispatcher) Dispatch(_ context.Context, event Alert) {
 		}
 		d.enqueue(job{dest: dest, body: body, event: event})
 	}
+}
+
+// currentDestinations returns a snapshot of the destinations Dispatch should
+// fan out to right now, safe to read while UpdateConfig swaps them out.
+func (d *AlertDispatcher) currentDestinations() []destination {
+	d.destMu.RLock()
+	defer d.destMu.RUnlock()
+	return d.destinations
+}
+
+// UpdateConfig atomically replaces the dispatcher's destinations, so alert
+// settings changes apply to the next Dispatch call without a process restart.
+// It validates cfg before applying; an invalid config is rejected and the
+// dispatcher keeps delivering to whatever it already had configured.
+func (d *AlertDispatcher) UpdateConfig(cfg config.AlertsConfig) error {
+	if d == nil {
+		return nil
+	}
+	destinations, err := buildDestinations(cfg)
+	if err != nil {
+		return err
+	}
+	d.destMu.Lock()
+	d.destinations = destinations
+	d.destMu.Unlock()
+	return nil
 }
 
 func (d *AlertDispatcher) enqueue(item job) {
@@ -405,6 +472,10 @@ func statusOf(err error) int {
 }
 
 func (d *AlertDispatcher) sendOnce(item job) error {
+	if item.dest.kind == KindEmail {
+		return d.sendEmail(item)
+	}
+
 	requestCtx, cancel := context.WithTimeout(d.ctx, d.attemptTimeout)
 	defer cancel()
 
@@ -457,7 +528,7 @@ func sanitizeError(err error, dest destination) error {
 	case errors.Is(err, context.Canceled):
 		return context.Canceled
 	default:
-		return errors.New(redactText(err.Error(), dest.secrets))
+		return errors.New(redactText(err.Error(), dest.secretValues()))
 	}
 }
 
@@ -476,7 +547,7 @@ func readErrorSnippet(body io.Reader, dest destination) string {
 		}
 		return r
 	}, snippet)
-	return redactText(snippet, dest.secrets)
+	return redactText(snippet, dest.secretValues())
 }
 
 func encodePayload(kind string, event Alert) ([]byte, error) {
@@ -487,6 +558,8 @@ func encodePayload(kind string, event Alert) ([]byte, error) {
 			return nil, fmt.Errorf("marshal slack alert payload: %w", err)
 		}
 		return body, nil
+	case KindEmail:
+		return buildEmailBody(event), nil
 	default:
 		body, err := json.Marshal(event)
 		if err != nil {
@@ -603,7 +676,7 @@ func (d *AlertDispatcher) logWarn(message string, err error, dest destination, e
 	}
 	errText := ""
 	if err != nil {
-		errText = redactText(err.Error(), dest.secrets)
+		errText = redactText(err.Error(), dest.secretValues())
 	}
 	args := []any{
 		"error", errText,

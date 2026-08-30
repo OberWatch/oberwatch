@@ -361,6 +361,54 @@ func TestPathIsMountPointAndEmergencyStopSetting(t *testing.T) {
 	}
 }
 
+func TestInitAlertDispatcher_SeedsFromConfigAndAppliesStoredSettings(t *testing.T) {
+	t.Parallel()
+
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "settings.db"), 0, nil)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	cfg := config.AlertsConfig{WebhookURL: "https://alerts.example/hook"}
+	dispatcher, err := initAlertDispatcher(context.Background(), store, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("initAlertDispatcher() error = %v", err)
+	}
+	t.Cleanup(dispatcher.Close)
+
+	settings, err := storage.LoadAlertSettings(context.Background(), store)
+	if err != nil {
+		t.Fatalf("LoadAlertSettings() error = %v", err)
+	}
+	if settings.WebhookURL != cfg.WebhookURL {
+		t.Fatalf("LoadAlertSettings().WebhookURL = %q, want the TOML value imported once, %q", settings.WebhookURL, cfg.WebhookURL)
+	}
+
+	// A dashboard-set value already in SQLite must win over the TOML config on
+	// the next startup: the import is one-time, not a resync on every boot.
+	dashboardWebhook := "https://dashboard.example/already-set"
+	if setErr := store.SetSetting(context.Background(), "alerts.webhook_url", dashboardWebhook); setErr != nil {
+		t.Fatalf("SetSetting() error = %v", setErr)
+	}
+
+	secondDispatcher, err := initAlertDispatcher(context.Background(), store, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("second initAlertDispatcher() error = %v", err)
+	}
+	t.Cleanup(secondDispatcher.Close)
+
+	settings, err = storage.LoadAlertSettings(context.Background(), store)
+	if err != nil {
+		t.Fatalf("LoadAlertSettings() error = %v", err)
+	}
+	if settings.WebhookURL != dashboardWebhook {
+		t.Fatalf("LoadAlertSettings().WebhookURL = %q, want the dashboard-set value preserved, %q", settings.WebhookURL, dashboardWebhook)
+	}
+}
+
 func TestWarnIfContainerDataDirNotMounted_LogsWarning(t *testing.T) {
 	t.Parallel()
 

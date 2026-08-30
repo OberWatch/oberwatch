@@ -145,6 +145,31 @@ export interface AlertsResponse {
   alerts: Alert[];
 }
 
+export interface AlertSettingsResponse {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_from: string;
+  smtp_to: string[];
+  smtp_enabled: boolean;
+  smtp_password_is_set: boolean;
+  webhook_url_is_set: boolean;
+  slack_webhook_url_is_set: boolean;
+  live_applied: boolean;
+}
+
+export interface AlertSettingsPatchRequest {
+  webhook_url?: string;
+  slack_webhook_url?: string;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  smtp_password?: string;
+  smtp_from?: string;
+  smtp_to?: string[];
+  smtp_enabled?: boolean;
+}
+
 export interface Agent {
   name: string;
   status: string;

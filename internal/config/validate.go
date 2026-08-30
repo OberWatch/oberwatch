@@ -22,7 +22,7 @@ func Validate(cfg Config) error {
 	problems = append(problems, validateServer(cfg.Server)...)
 	problems = append(problems, validateUpstream(cfg.Upstream)...)
 	problems = append(problems, validateGate(cfg.Gate)...)
-	problems = append(problems, validateAlerts(cfg.Alerts)...)
+	problems = append(problems, ValidateAlertsConfig(cfg.Alerts)...)
 	problems = append(problems, validateTrace(cfg.Trace)...)
 	problems = append(problems, validateTest(cfg.Test)...)
 	problems = append(problems, validatePricing(cfg.Pricing)...)
@@ -168,7 +168,10 @@ func validateBudgetAction(field string, action BudgetAction) []string {
 	return []string{fmt.Sprintf("%s must be one of reject, downgrade, alert, kill, got %q", field, action)}
 }
 
-func validateAlerts(alerts AlertsConfig) []string {
+// ValidateAlertsConfig checks alerts delivery settings (webhook, Slack, and
+// email). It is shared by full-config validation and by the runtime settings
+// API, which validates a candidate before persisting or live-applying it.
+func ValidateAlertsConfig(alerts AlertsConfig) []string {
 	problems := make([]string, 0)
 
 	if strings.TrimSpace(alerts.WebhookURL) != "" {
@@ -183,18 +186,7 @@ func validateAlerts(alerts AlertsConfig) []string {
 	}
 
 	if alerts.Email.Enabled {
-		if strings.TrimSpace(alerts.Email.SMTPHost) == "" {
-			problems = append(problems, "alerts.email.smtp_host must not be empty when alerts.email.enabled is true")
-		}
-		if alerts.Email.SMTPPort < 1 || alerts.Email.SMTPPort > 65535 {
-			problems = append(problems, fmt.Sprintf("alerts.email.smtp_port must be between 1 and 65535, got %d", alerts.Email.SMTPPort))
-		}
-		if strings.TrimSpace(alerts.Email.From) == "" {
-			problems = append(problems, "alerts.email.from must not be empty when alerts.email.enabled is true")
-		}
-		if len(alerts.Email.To) == 0 {
-			problems = append(problems, "alerts.email.to must not be empty when alerts.email.enabled is true")
-		}
+		problems = append(problems, ValidateEmailConfig(alerts.Email)...)
 	}
 
 	return problems
