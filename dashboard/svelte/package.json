@@ -19,7 +19,8 @@
     "test:provider-status": "node --test scripts/provider-status.contract.test.mjs",
     "test:agents-delete": "node --test scripts/agent-delete.render.test.mjs scripts/check-agents-delete.mjs",
     "test:upgrade": "node --test scripts/upgrade.contract.test.mjs",
-    "test": "npm run test:unit && npm run test:model-column && npm run test:costs-page && npm run test:component-states && npm run test:provider-status && npm run test:agents-delete && npm run test:upgrade",
+    "test:settings-alerts": "node --test scripts/settings-alerts.contract.test.mjs",
+    "test": "npm run test:unit && npm run test:model-column && npm run test:costs-page && npm run test:component-states && npm run test:provider-status && npm run test:agents-delete && npm run test:upgrade && npm run test:settings-alerts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint:ts": "tsc --noEmit"
   },

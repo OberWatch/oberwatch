@@ -34,6 +34,14 @@ const (
 
 var validAgentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// alertConfigUpdater is the subset of the runtime alert dispatcher the
+// settings API needs: swapping its destinations to match a validated
+// candidate config. *alert.AlertDispatcher satisfies this; tests substitute a
+// fake to assert live-apply behavior without a real dispatcher.
+type alertConfigUpdater interface {
+	UpdateConfig(cfg config.AlertsConfig) error
+}
+
 // Server serves management API endpoints.
 //
 //nolint:govet // Keep fields grouped by dependency role and lifecycle.
@@ -50,6 +58,7 @@ type Server struct {
 	providerChecker providerStatusChecker
 	ollamaBaseURL   string
 	upgrader        upgradeManager
+	alertDispatcher alertConfigUpdater
 
 	// now is the clock used for provider status freshness. Tests replace it.
 	now func() time.Time
@@ -58,6 +67,13 @@ type Server struct {
 	providerRows       []provider.StatusRow
 	providerObservedAt time.Time
 	providerRefreshing bool
+
+	// alertSettingsMu serializes PATCH /settings/alerts end to end: load,
+	// merge, validate, durable commit, and dispatcher update all happen while
+	// holding it, so two concurrent PATCHes can never both merge against the
+	// same stale "current" and leave SQLite and the running dispatcher
+	// disagreeing about the final settings.
+	alertSettingsMu sync.Mutex
 }
 
 // providerStatusChecker probes public provider availability. provider.Checker
@@ -110,6 +126,13 @@ func New(cfg config.Config, budgetManager *budget.BudgetManager, store storage.S
 	go server.refreshProviderStatus(context.Background())
 
 	return server
+}
+
+// SetAlertDispatcher wires the runtime alert dispatcher into the server so
+// PATCH /settings/alerts can live-apply a validated change. Called once at
+// startup, after the dispatcher is built from SQLite-authoritative settings.
+func (s *Server) SetAlertDispatcher(d alertConfigUpdater) {
+	s.alertDispatcher = d
 }
 
 // initialProviderRows builds the placeholder rows served before the first
@@ -389,6 +412,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(basePath+"/login", s.handleLogin)
 	s.mux.HandleFunc(basePath+"/logout", s.handleLogout)
 	s.mux.HandleFunc(basePath+"/settings/password", s.handlePasswordChange)
+	s.mux.HandleFunc(basePath+"/settings/alerts", s.handleSettingsAlerts)
 	s.mux.HandleFunc(basePath+"/alerts", s.handleAlerts)
 	s.mux.HandleFunc(basePath+"/pricing", s.handlePricing)
 	s.mux.HandleFunc(basePath+"/budgets", s.handleBudgets)
@@ -451,6 +475,110 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pricing": rows,
 	})
+}
+
+// handleSettingsAlerts serves the SQLite-authoritative alert delivery
+// settings that back the live dispatcher: masked over GET, and updated with
+// validate-before-apply semantics over PATCH.
+func (s *Server) handleSettingsAlerts(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "storage is not configured", "", 0, 0)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetSettingsAlerts(w, r)
+	case http.MethodPatch:
+		s.handlePatchSettingsAlerts(w, r)
+	default:
+		writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleGetSettingsAlerts(w http.ResponseWriter, r *http.Request) {
+	current, err := storage.LoadAlertSettings(r.Context(), s.store)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "failed to load alert settings", "", 0, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, alertSettingsResponse(current))
+}
+
+func (s *Server) handlePatchSettingsAlerts(w http.ResponseWriter, r *http.Request) {
+	var patch storage.AlertSettingsPatch
+	if err := decodeRequestBody(r, &patch); err != nil {
+		writeError(w, http.StatusBadRequest, "config_error", "invalid request body", "", 0, 0)
+		return
+	}
+
+	// Serialize the whole load -> merge -> validate -> live-apply -> commit
+	// sequence. Without this, two concurrent PATCHes could each load the
+	// same "current", merge their own field on top of it, and commit
+	// independently: the second commit would silently discard the first
+	// PATCH's field from both SQLite and the running dispatcher.
+	s.alertSettingsMu.Lock()
+	defer s.alertSettingsMu.Unlock()
+
+	current, err := storage.LoadAlertSettings(r.Context(), s.store)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "config_error", "failed to load alert settings", "", 0, 0)
+		return
+	}
+
+	candidate := storage.MergeAlertSettingsPatch(current, patch)
+	candidateConfig := candidate.ToAlertsConfig()
+	if problems := config.ValidateAlertsConfig(candidateConfig); len(problems) > 0 {
+		writeError(w, http.StatusBadRequest, "config_error", strings.Join(problems, "; "), "", 0, 0)
+		return
+	}
+
+	// Live-apply before persisting. If the dispatcher rejects the candidate,
+	// nothing is written to SQLite, so storage and the running dispatcher
+	// never diverge.
+	if s.alertDispatcher != nil {
+		if err := s.alertDispatcher.UpdateConfig(candidateConfig); err != nil {
+			writeError(w, http.StatusInternalServerError, "config_error", "alert settings failed to apply to the running dispatcher", "", 0, 0)
+			return
+		}
+	}
+
+	// Commit the already-validated, already-live patch as one atomic SQLite
+	// transaction. If this fails after the dispatcher has already taken the
+	// candidate, restore the dispatcher to the prior settings so the running
+	// config still matches what's durably stored.
+	updated, err := storage.ApplyAlertSettingsPatch(r.Context(), s.store, current, patch)
+	if err != nil {
+		if s.alertDispatcher != nil {
+			_ = s.alertDispatcher.UpdateConfig(current.ToAlertsConfig())
+		}
+		writeError(w, http.StatusInternalServerError, "config_error", "failed to persist alert settings", "", 0, 0)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, alertSettingsResponse(updated))
+}
+
+// alertSettingsResponse masks every secret field. It never includes the raw
+// smtp_password, webhook_url, or slack_webhook_url; each is reported only as
+// an is_set boolean. live_applied is always true: handlePatchSettingsAlerts
+// only ever returns a success response after the dispatcher has already
+// accepted the same settings that were just persisted, so a 200 response
+// always reflects what's currently running.
+func alertSettingsResponse(settings storage.AlertSettings) map[string]any {
+	smtpTo := append([]string{}, settings.SMTPTo...)
+	return map[string]any{
+		"smtp_host":                settings.SMTPHost,
+		"smtp_port":                settings.SMTPPort,
+		"smtp_user":                settings.SMTPUser,
+		"smtp_from":                settings.SMTPFrom,
+		"smtp_to":                  smtpTo,
+		"smtp_enabled":             settings.SMTPEnabled,
+		"smtp_password_is_set":     strings.TrimSpace(settings.SMTPPassword) != "",
+		"webhook_url_is_set":       strings.TrimSpace(settings.WebhookURL) != "",
+		"slack_webhook_url_is_set": strings.TrimSpace(settings.SlackWebhookURL) != "",
+		"live_applied":             true,
+	}
 }
 
 func (s *Server) handleBudgets(w http.ResponseWriter, r *http.Request) {

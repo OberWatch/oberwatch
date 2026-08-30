@@ -406,6 +406,8 @@ func (f testDispatcher) Dispatch(ctx context.Context, entry alert.Alert) {
 type failingStore struct {
 	queryCostsErr  error
 	deleteAgentErr error
+	setSettingErr  error
+	settings       map[string]string
 }
 
 func (f failingStore) SaveCostRecord(context.Context, storage.CostRecord) error {
@@ -453,6 +455,9 @@ func (f failingStore) LoadBudgetSnapshots(context.Context) ([]storage.BudgetSnap
 }
 
 func (f failingStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	if value, ok := f.settings[key]; ok {
+		return value, true, nil
+	}
 	switch key {
 	case sessionTokenKey:
 		return testSessionToken, true, nil
@@ -466,7 +471,7 @@ func (f failingStore) GetSetting(_ context.Context, key string) (string, bool, e
 }
 
 func (f failingStore) SetSetting(context.Context, string, string) error {
-	return nil
+	return f.setSettingErr
 }
 
 func (f failingStore) DeleteSetting(context.Context, string) error {

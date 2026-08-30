@@ -945,6 +945,53 @@ func (s *SQLiteStore) DeleteSetting(ctx context.Context, key string) error {
 	return nil
 }
 
+// testInjectSettingsBatchFailureAt, when >= 0, makes WriteSettingsBatch fail
+// right before applying the op at that index, after already applying every
+// earlier op within the same transaction. It is exercised only by this
+// package's own tests (see alert_settings_test.go) to prove that a mid-batch
+// storage failure rolls back the whole transaction rather than leaving a
+// partial write committed; production code never sets it.
+var testInjectSettingsBatchFailureAt = -1
+
+// WriteSettingsBatch applies every op in ops inside a single transaction, so
+// a storage error partway through a multi-key patch (see
+// ApplyAlertSettingsPatch) never leaves settings partially updated: either
+// every op commits, or none of them do.
+func (s *SQLiteStore) WriteSettingsBatch(ctx context.Context, ops []SettingWrite) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin settings batch: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	for i, op := range ops {
+		if testInjectSettingsBatchFailureAt == i {
+			return fmt.Errorf("injected test failure before op %d", i)
+		}
+		key := strings.TrimSpace(op.Key)
+		if op.Clear {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", key); err != nil {
+				return fmt.Errorf("clear setting %q: %w", key, err)
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO settings (key, value)
+			VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value
+		`, key, op.Value); err != nil {
+			return fmt.Errorf("set setting %q: %w", key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit settings batch: %w", err)
+	}
+	return nil
+}
+
 // UpsertTask writes the settled lifetime spend total for one task.
 func (s *SQLiteStore) UpsertTask(ctx context.Context, record TaskRecord) error {
 	record.TaskID = strings.TrimSpace(record.TaskID)

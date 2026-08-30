@@ -603,6 +603,22 @@ func setupSignalHandling(parent context.Context, stderr io.Writer) (context.Cont
 	return ctx, cleanup
 }
 
+// initAlertDispatcher seeds SQLite from cfg exactly once (on the first boot
+// that finds alert settings absent), then builds the runtime dispatcher from
+// whatever is in SQLite rather than from cfg directly. After this point
+// config.toml no longer owns alert delivery settings: the dashboard does, and
+// dispatcher.UpdateConfig is how later changes apply live.
+func initAlertDispatcher(ctx context.Context, store storage.Store, cfg config.AlertsConfig, logger *slog.Logger) (*alert.AlertDispatcher, error) {
+	if err := storage.ImportAlertSettingsFromConfig(ctx, store, cfg); err != nil {
+		return nil, fmt.Errorf("import alert settings: %w", err)
+	}
+	settings, err := storage.LoadAlertSettings(ctx, store)
+	if err != nil {
+		return nil, fmt.Errorf("load alert settings: %w", err)
+	}
+	return alert.NewDispatcher(settings.ToAlertsConfig(), 5*time.Second, logger)
+}
+
 type alertDispatchFunc func(context.Context, alert.Alert)
 
 func (f alertDispatchFunc) Dispatch(ctx context.Context, entry alert.Alert) {
@@ -663,7 +679,7 @@ func runServeRuntime(
 	costWriter := storage.NewBufferedCostWriter(store, bufferSize, logger)
 	defer costWriter.Close()
 
-	baseDispatcher, err := alert.NewDispatcher(cfg.Alerts, 5*time.Second, logger)
+	baseDispatcher, err := initAlertDispatcher(context.Background(), store, cfg.Alerts, logger)
 	if err != nil {
 		return fmt.Errorf("initialize alert dispatcher: %w", err)
 	}
@@ -701,6 +717,7 @@ func runServeRuntime(
 		budgetManager.SetEmergencyStop(enabled)
 	}
 	managementServer = api.New(cfg, budgetManager, store, displayVersion())
+	managementServer.SetAlertDispatcher(baseDispatcher)
 
 	hooks := proxy.Hooks{
 		Management: managementServer,
