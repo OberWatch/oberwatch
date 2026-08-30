@@ -71,23 +71,30 @@ type Stats struct {
 	QueueCapacity int
 }
 
-type destinationSecrets struct {
-	values []string
+type destinationDetails struct {
+	secrets []string
+	smtp    *smtpDestConfig
 }
 
 type destination struct {
 	kind     string
 	url      string
 	redacted string
-	secrets  *destinationSecrets
-	smtp     *smtpDestConfig
+	details  *destinationDetails
 }
 
 func (d destination) secretValues() []string {
-	if d.secrets == nil {
+	if d.details == nil {
 		return nil
 	}
-	return d.secrets.values
+	return d.details.secrets
+}
+
+func (d destination) smtpConfig() *smtpDestConfig {
+	if d.details == nil {
+		return nil
+	}
+	return d.details.smtp
 }
 
 //nolint:govet // field grouping is deliberate.
@@ -235,7 +242,7 @@ func newDestination(kind string, rawURL string) destination {
 		kind:     kind,
 		url:      rawURL,
 		redacted: RedactURL(rawURL),
-		secrets:  &destinationSecrets{values: urlSecrets(rawURL)},
+		details:  &destinationDetails{secrets: urlSecrets(rawURL)},
 	}
 }
 

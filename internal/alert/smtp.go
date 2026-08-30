@@ -69,16 +69,18 @@ func buildSMTPDestination(email config.EmailConfig) (destination, error) {
 	return destination{
 		kind:     KindEmail,
 		redacted: fmt.Sprintf("smtp://%s:%d", email.SMTPHost, email.SMTPPort),
-		secrets:  &destinationSecrets{values: secrets},
-		smtp: &smtpDestConfig{
-			host:         email.SMTPHost,
-			port:         email.SMTPPort,
-			user:         email.SMTPUser,
-			password:     email.SMTPPassword,
-			from:         email.From,
-			to:           append([]string(nil), email.To...),
-			envelopeFrom: envelopeFrom,
-			envelopeTo:   envelopeTo,
+		details: &destinationDetails{
+			secrets: secrets,
+			smtp: &smtpDestConfig{
+				host:         email.SMTPHost,
+				port:         email.SMTPPort,
+				user:         email.SMTPUser,
+				password:     email.SMTPPassword,
+				from:         email.From,
+				to:           append([]string(nil), email.To...),
+				envelopeFrom: envelopeFrom,
+				envelopeTo:   envelopeTo,
+			},
 		},
 	}, nil
 }
@@ -156,7 +158,7 @@ func (d *AlertDispatcher) useImplicitTLS(port int) bool {
 // deadline (or dispatcher shutdown) fires, since net/smtp does not accept a
 // context directly.
 func (d *AlertDispatcher) sendEmail(item job) error {
-	cfg := item.dest.smtp
+	cfg := item.dest.smtpConfig()
 
 	requestCtx, cancel := context.WithTimeout(d.ctx, d.attemptTimeout)
 	defer cancel()
