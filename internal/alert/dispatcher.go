@@ -72,10 +72,10 @@ type Stats struct {
 }
 
 type destination struct {
+	secrets  []string
 	kind     string
 	url      string
 	redacted string
-	secrets  []string
 	smtp     *smtpDestConfig
 }
 

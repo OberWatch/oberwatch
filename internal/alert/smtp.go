@@ -197,8 +197,8 @@ func (d *AlertDispatcher) sendEmail(item job) error {
 		if !ok {
 			return &deliveryError{err: fmt.Errorf("smtp %s does not support STARTTLS: refusing to send in plaintext", item.dest.redacted), retryable: true}
 		}
-		if err := client.StartTLS(d.tlsConfigFor(cfg.host)); err != nil {
-			return &deliveryError{err: fmt.Errorf("starttls %s: %w", item.dest.redacted, sanitizeError(err, item.dest)), retryable: true}
+		if tlsErr := client.StartTLS(d.tlsConfigFor(cfg.host)); tlsErr != nil {
+			return &deliveryError{err: fmt.Errorf("starttls %s: %w", item.dest.redacted, sanitizeError(tlsErr, item.dest)), retryable: true}
 		}
 	}
 
@@ -206,17 +206,17 @@ func (d *AlertDispatcher) sendEmail(item job) error {
 		if state, ok := client.TLSConnectionState(); !ok || !state.HandshakeComplete {
 			return &deliveryError{err: fmt.Errorf("smtp auth to %s refused: connection is not encrypted", item.dest.redacted)}
 		}
-		if err := client.Auth(smtp.PlainAuth("", cfg.user, cfg.password, cfg.host)); err != nil {
-			return classifySMTPError("auth", item.dest, err)
+		if authErr := client.Auth(smtp.PlainAuth("", cfg.user, cfg.password, cfg.host)); authErr != nil {
+			return classifySMTPError("auth", item.dest, authErr)
 		}
 	}
 
-	if err := client.Mail(cfg.envelopeFrom); err != nil {
-		return classifySMTPError("mail from", item.dest, err)
+	if mailErr := client.Mail(cfg.envelopeFrom); mailErr != nil {
+		return classifySMTPError("mail from", item.dest, mailErr)
 	}
 	for _, rcpt := range cfg.envelopeTo {
-		if err := client.Rcpt(rcpt); err != nil {
-			return classifySMTPError("rcpt to", item.dest, err)
+		if rcptErr := client.Rcpt(rcpt); rcptErr != nil {
+			return classifySMTPError("rcpt to", item.dest, rcptErr)
 		}
 	}
 

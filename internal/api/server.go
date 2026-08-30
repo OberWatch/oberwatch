@@ -537,7 +537,7 @@ func (s *Server) handlePatchSettingsAlerts(w http.ResponseWriter, r *http.Reques
 	// nothing is written to SQLite, so storage and the running dispatcher
 	// never diverge.
 	if s.alertDispatcher != nil {
-		if err := s.alertDispatcher.UpdateConfig(candidateConfig); err != nil {
+		if applyErr := s.alertDispatcher.UpdateConfig(candidateConfig); applyErr != nil {
 			writeError(w, http.StatusInternalServerError, "config_error", "alert settings failed to apply to the running dispatcher", "", 0, 0)
 			return
 		}

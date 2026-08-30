@@ -66,13 +66,11 @@ func generateTestTLSCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
 //
 //nolint:govet // keep test session fields explicit.
 type recordedSMTPSession struct {
-	from      string
-	to        []string
-	data      string
-	usedTLS   bool
-	usedAuth  bool
-	authUser  string
-	authError bool
+	from     string
+	to       []string
+	data     string
+	usedTLS  bool
+	usedAuth bool
 }
 
 //nolint:govet // keep fake server fields grouped by role.

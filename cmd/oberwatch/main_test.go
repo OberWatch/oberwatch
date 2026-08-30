@@ -390,8 +390,8 @@ func TestInitAlertDispatcher_SeedsFromConfigAndAppliesStoredSettings(t *testing.
 	// A dashboard-set value already in SQLite must win over the TOML config on
 	// the next startup: the import is one-time, not a resync on every boot.
 	dashboardWebhook := "https://dashboard.example/already-set"
-	if err := store.SetSetting(context.Background(), "alerts.webhook_url", dashboardWebhook); err != nil {
-		t.Fatalf("SetSetting() error = %v", err)
+	if setErr := store.SetSetting(context.Background(), "alerts.webhook_url", dashboardWebhook); setErr != nil {
+		t.Fatalf("SetSetting() error = %v", setErr)
 	}
 
 	secondDispatcher, err := initAlertDispatcher(context.Background(), store, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
