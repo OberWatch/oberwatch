@@ -1595,7 +1595,7 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 	})
 
 	now := time.Now().UTC()
-	if err := sqliteStore.UpsertAgent(context.Background(), storage.AgentRecord{
+	if upsertErr := sqliteStore.UpsertAgent(context.Background(), storage.AgentRecord{
 		Name:            "email-agent",
 		Status:          "active",
 		BudgetLimitUSD:  10,
@@ -1605,8 +1605,8 @@ func newTestServer(t *testing.T) (*Server, *budget.BudgetManager, storage.Store)
 		PeriodResetsAt:  now.Add(24 * time.Hour),
 		FirstSeenAt:     now,
 		LastSeenAt:      now,
-	}); err != nil {
-		t.Fatalf("UpsertAgent() error = %v", err)
+	}); upsertErr != nil {
+		t.Fatalf("UpsertAgent() error = %v", upsertErr)
 	}
 
 	manager, err := budget.NewPersistentManager(cfg.Gate, nil, sqliteStore)

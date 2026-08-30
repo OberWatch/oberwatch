@@ -663,8 +663,8 @@ func TestPersistentManager_TrafficDiscoversAndPersistsAgent(t *testing.T) {
 	if flushErr := manager.Flush(context.Background()); flushErr != nil {
 		t.Fatalf("Flush() error = %v", flushErr)
 	}
-	if _, found, err := store.GetAgent(context.Background(), "email-agent"); err != nil || found {
-		t.Fatalf("GetAgent(email-agent) before traffic = found %v, err %v; want absent", found, err)
+	if _, found, getErr := store.GetAgent(context.Background(), "email-agent"); getErr != nil || found {
+		t.Fatalf("GetAgent(email-agent) before traffic = found %v, err %v; want absent", found, getErr)
 	}
 
 	manager.RecordSpend("email-agent", 1.25)
@@ -1425,8 +1425,8 @@ func TestBudgetViewsAndMutations(t *testing.T) {
 	}
 
 	updateTests := []struct {
-		name      string
 		update    BudgetUpdate
+		name      string
 		wantError bool
 	}{
 		{

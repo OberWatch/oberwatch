@@ -143,11 +143,11 @@ func TestSQLiteStore_AgentTaskBudgetSurvivesMigration(t *testing.T) {
 	}
 
 	record.TaskBudgetUSD = 3.5
-	if err := reopened.UpsertAgent(ctx, record); err != nil {
-		t.Fatalf("UpsertAgent(after migration) error = %v", err)
+	if upsertErr := reopened.UpsertAgent(ctx, record); upsertErr != nil {
+		t.Fatalf("UpsertAgent(after migration) error = %v", upsertErr)
 	}
-	if err := reopened.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if closeErr := reopened.Close(); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
 	}
 
 	restarted, err := NewSQLiteStore(dsn, 0, logger)
