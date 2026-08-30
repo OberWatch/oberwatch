@@ -72,15 +72,15 @@ type Stats struct {
 }
 
 type destinationDetails struct {
-	secrets []string
 	smtp    *smtpDestConfig
+	secrets []string
 }
 
 type destination struct {
+	details  *destinationDetails
 	kind     string
 	url      string
 	redacted string
-	details  *destinationDetails
 }
 
 func (d destination) secretValues() []string {
